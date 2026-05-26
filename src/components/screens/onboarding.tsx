@@ -7,7 +7,9 @@ import { useState, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
 import { Avatar, Badge, Button, Card, Field, Icon, Input, Modal } from "@/components/ui/primitives";
 import { Wordmark } from "@/components/shell/sidebar";
-import { MARCUS } from "@/lib/mock-data";
+import { usePartner } from "@/components/partner-context";
+import { useToast } from "@/components/ui/toast";
+import { createClient } from "@/lib/supabase/client";
 import {
   AvailabilityPage,
   DocsPage,
@@ -201,11 +203,12 @@ function StepWrap({ kicker, title, sub, children }: { kicker: string; title: str
 }
 
 function WelcomeStep() {
+  const partner = usePartner();
   return (
     <div>
       <OBTitle
         kicker="GET STARTED"
-        title={`Welcome to Fixfy, ${MARCUS.firstName}.`}
+        title={`Welcome to Fixfy, ${partner.firstName}.`}
         sub="A trade portal built for UK tradespeople. £99 a month, 3-day free trial, no commission on jobs — ever. Let's get you set up in about 8 minutes."
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
@@ -232,32 +235,58 @@ function WelcomeStep() {
 }
 
 function DetailsStep() {
+  const partner = usePartner();
+  const toast = useToast();
+  const [firstName, setFirstName] = useState(partner.firstName);
+  const [lastName, setLastName] = useState(partner.lastName);
+  const [phone, setPhone] = useState(partner.phone);
+  const [tradingName, setTradingName] = useState(partner.tradingName);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { error } = await createClient()
+        .from("partners")
+        .update({ contact_name: `${firstName} ${lastName}`.trim(), phone: phone || null, company_name: tradingName || null })
+        .eq("id", partner.id);
+      if (error) throw error;
+      setSavedAt(new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }));
+      toast({ text: "Details saved", icon: "check" });
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Couldn't save details", icon: "alert-triangle", tone: "coral" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div>
-      <OBTitle kicker="STEP 2" title="Your details" sub="What customers see on every job report." />
+      <OBTitle kicker="STEP 2" title="Your details" sub="What customers see on every job report. This is your real account — edit and save." />
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
-        <Avatar initials={MARCUS.initials} size={68} bg={T.navy} />
+        <Avatar initials={partner.initials} size={68} bg={T.navy} />
         <Button variant="secondary" icon="camera">Upload photo</Button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
-        <Field label="First name"><Input value="Marcus" placeholder="First name" /></Field>
-        <Field label="Last name"><Input value="Adeyemi" placeholder="Last name" /></Field>
-        <Field label="Phone (verified for SMS)"><Input value="+44 7700 900142" icon="phone" /></Field>
-        <Field label="Date of birth"><Input value="14 / 03 / 1987" icon="calendar" /></Field>
-        <Field label="Trading name (or limited company)"><Input value="Adeyemi Plumbing & Maintenance" /></Field>
-        <Field label="Company number (optional)"><Input value="14829011" /></Field>
+        <Field label="First name"><Input value={firstName} onChange={setFirstName} placeholder="First name" /></Field>
+        <Field label="Last name"><Input value={lastName} onChange={setLastName} placeholder="Last name" /></Field>
+        <Field label="Email (verified for sign-in)"><Input value={partner.email} icon="mail" /></Field>
+        <Field label="Phone (verified for SMS)"><Input value={phone} onChange={setPhone} icon="phone" placeholder="07…" /></Field>
+        <Field label="Trading name (or limited company)"><Input value={tradingName} onChange={setTradingName} /></Field>
       </div>
-      <Field label="Public bio · max 240 chars">
-        <textarea
-          defaultValue={MARCUS.bio}
-          style={{ width: "100%", minHeight: 80, padding: 10, borderRadius: 8, border: `1px solid ${T.line}`, fontFamily: T.sans, fontSize: 13, color: T.ink, outline: "none", resize: "vertical", boxSizing: "border-box" }}
-        />
-      </Field>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+        <Button variant="primary" icon="check" onClick={save} disabled={saving}>
+          {saving ? "Saving…" : "Save details"}
+        </Button>
+        {savedAt && <span style={{ fontSize: 12, color: T.green }}>Saved at {savedAt}</span>}
+      </div>
     </div>
   );
 }
 
 function SelfBillStep() {
+  const partner = usePartner();
   return (
     <div>
       <OBTitle kicker="STEP 8" title="Self-bill agreement" sub="We invoice you on your behalf for completed jobs. Sign once, valid for 12 months." />
@@ -265,7 +294,7 @@ function SelfBillStep() {
         <div style={{ padding: 16, background: T.paper, borderRadius: 10, fontSize: 12.5, color: T.slate, lineHeight: 1.6, maxHeight: 180, overflow: "auto" }}>
           <b style={{ color: T.ink }}>HMRC Self-Billing Agreement</b>
           <br />
-          Between <b>GET FIXFY LTD</b> (the customer) and <b>{MARCUS.tradingName}</b> (the supplier).
+          Between <b>GET FIXFY LTD</b> (the customer) and <b>{partner.tradingName}</b> (the supplier).
           <br />
           <br />
           1. The customer agrees to issue self-billed invoices for all supplies made by the supplier from the date of this agreement until the date of termination.
@@ -322,6 +351,7 @@ function PoliciesStep() {
 }
 
 function PaymentStep() {
+  const partner = usePartner();
   return (
     <div>
       <OBTitle
@@ -336,7 +366,7 @@ function PaymentStep() {
             <Row label="Expiry" columns="1fr"><Input value="09 / 28" /></Row>
             <Row label="CVC" columns="1fr"><Input value="•••" /></Row>
           </div>
-          <Row label="Postcode"><Input value={MARCUS.postcode} /></Row>
+          <Row label="Postcode"><Input value={partner.postcode} /></Row>
           <div style={{ marginTop: 12, padding: 12, background: T.paper2, borderRadius: 8, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: T.slate }}>
             <Icon name="lock" size={13} color={T.mute} />
             Secured by Stripe · PCI-DSS. Fixfy never sees your card number.
@@ -364,18 +394,48 @@ function PaymentStep() {
 }
 
 function DoneStep() {
+  const partner = usePartner();
+  const rows: { label: string; value: string }[] = [
+    { label: "Name", value: `${partner.firstName} ${partner.lastName}`.trim() || "—" },
+    { label: "Trading name", value: partner.tradingName || "—" },
+    { label: "Email", value: partner.email || "—" },
+    { label: "Phone", value: partner.phone || "—" },
+    { label: "Primary trade", value: partner.primaryTrade },
+    { label: "Trades", value: partner.trades.join(", ") || "—" },
+    { label: "Service area", value: partner.postcode ? `${partner.postcode} · ${partner.radiusMiles} mi` : "—" },
+  ];
   return (
-    <div style={{ textAlign: "center", padding: "40px 20px" }}>
-      <div style={{ width: 64, height: 64, borderRadius: 9999, background: T.green50, color: T.green, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 18 }}>
-        <Icon name="check" size={32} />
+    <div style={{ padding: "20px 8px" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ width: 64, height: 64, borderRadius: 9999, background: T.green50, color: T.green, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 18 }}>
+          <Icon name="check" size={32} />
+        </div>
+        <div style={{ fontSize: 30, fontWeight: 600, color: T.navy, letterSpacing: -0.5 }}>You&apos;re in, {partner.firstName}.</div>
+        <div style={{ fontSize: 14, color: T.slate, marginTop: 10, maxWidth: 460, margin: "10px auto 0", lineHeight: 1.55 }}>
+          {partner.trialDaysLeft > 0 ? (
+            <>Your trial has <b style={{ color: T.coral }}>{partner.trialDaysLeft} day{partner.trialDaysLeft === 1 ? "" : "s"}</b> left. Here&apos;s what you registered:</>
+          ) : (
+            <>Here&apos;s what you registered:</>
+          )}
+        </div>
       </div>
-      <div style={{ fontSize: 30, fontWeight: 600, color: T.navy, letterSpacing: -0.5 }}>You&apos;re in, Marcus.</div>
-      <div style={{ fontSize: 14, color: T.slate, marginTop: 10, maxWidth: 460, margin: "10px auto 0", lineHeight: 1.55 }}>
-        Your trial runs until <span className="fx-mono">{MARCUS.trialEndsOn}</span>. We&apos;ve already matched{" "}
-        <b style={{ color: T.coral }}>8 leads</b> and queued <b style={{ color: T.coral }}>12 jobs</b> in your area.
-      </div>
-      <div style={{ marginTop: 24, display: "flex", justifyContent: "center", gap: 10 }}>
-        <Button variant="secondary" icon="play-circle">Watch 90-second tour</Button>
+      <Card style={{ maxWidth: 460, margin: "20px auto 0", padding: 0 }}>
+        {rows.map((r, i) => (
+          <div
+            key={r.label}
+            style={{
+              display: "flex",
+              gap: 12,
+              padding: "11px 16px",
+              borderBottom: i < rows.length - 1 ? `1px solid ${T.line}` : "none",
+            }}
+          >
+            <span style={{ flex: "0 0 130px", fontSize: 12.5, color: T.mute }}>{r.label}</span>
+            <span style={{ flex: 1, fontSize: 13, color: T.ink, fontWeight: 500 }}>{r.value}</span>
+          </div>
+        ))}
+      </Card>
+      <div style={{ marginTop: 22, display: "flex", justifyContent: "center", gap: 10 }}>
         <Button variant="dark" icon="layout-dashboard">Open dashboard</Button>
       </div>
     </div>

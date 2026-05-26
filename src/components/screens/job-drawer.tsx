@@ -26,7 +26,7 @@ import { MapBackground } from "@/components/ui/map-background";
 import { SourceTag } from "./jobs";
 import { formatGBP, formatGBPdec } from "@/lib/format";
 import { useMyJobs } from "@/components/jobs-context";
-import { CHECKLISTS, MY_JOBS } from "@/lib/mock-data";
+import { CHECKLISTS } from "@/lib/mock-data";
 import type { ChecklistItem as ChecklistItemType, MyJob } from "@/types";
 import type { ToastInput } from "@/components/ui/toast";
 
@@ -42,7 +42,7 @@ export function JobDrawer({
   onShowToast: ShowToast;
 }) {
   const { jobs } = useMyJobs();
-  const job = jobs.find((j) => j.id === jobId) ?? MY_JOBS.find((j) => j.id === jobId);
+  const job = jobs.find((j) => j.id === jobId); // real jobs only; unknown id → drawer closed
   const [tab, setTab] = useState("overview");
   const [closing, setClosing] = useState(false);
 
