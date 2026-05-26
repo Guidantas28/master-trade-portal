@@ -1,0 +1,813 @@
+"use client";
+
+// Opportunities — Leads, Available jobs, Available quotes. Ported from opportunities.jsx.
+
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { T } from "@/lib/tokens";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  Icon,
+  Input,
+  Modal,
+  SectionHeader,
+  Tabs,
+  Toggle,
+} from "@/components/ui/primitives";
+import { formatGBP, formatGBPdec } from "@/lib/format";
+import { AVAILABLE_JOBS, LEADS, MARCUS } from "@/lib/mock-data";
+import { usePartner } from "@/components/partner-context";
+import { createClient } from "@/lib/supabase/client";
+import { fetchAvailableQuotes, submitBid } from "@/lib/queries/quotes";
+import type { AvailableJob, Lead, QuoteRequest, QuoteRequestStatus } from "@/types";
+import type { ToastInput } from "@/components/ui/toast";
+
+type ShowToast = (t: ToastInput) => void;
+
+// ============================================================
+// LEADS
+// ============================================================
+export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
+  const [trade, setTrade] = useState("All trades");
+  const [sort, setSort] = useState<"distance" | "budget">("distance");
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+
+  const tradeChips = ["All trades", "Plumbing", "General Maintenance", "Light Carpentry", "Electrical"];
+
+  const filtered = LEADS.filter((l) => trade === "All trades" || l.trade === trade);
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === "distance") return a.distance - b.distance;
+    if (sort === "budget") return b.budgetMax - a.budgetMax;
+    return 0;
+  });
+
+  return (
+    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18, flex: 1, overflow: "auto" }}>
+      <SectionHeader
+        title="Leads"
+        subtitle="Customer enquiries Fixfy hasn't quoted. Max 5 trades reach each lead — first contact gets first answer."
+        actions={
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button variant="secondary" icon="sliders-horizontal">Saved filters</Button>
+            <Button variant="secondary" icon="bell">Alerts</Button>
+          </div>
+        }
+      />
+
+      {/* Filter row */}
+      <Card style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          {tradeChips.map((c) => (
+            <button
+              key={c}
+              onClick={() => setTrade(c)}
+              style={{
+                padding: "6px 11px",
+                borderRadius: 8,
+                border: "none",
+                cursor: "pointer",
+                background: trade === c ? T.navy : "transparent",
+                color: trade === c ? T.white : T.slate,
+                fontFamily: T.sans,
+                fontSize: 12.5,
+                fontWeight: 500,
+                transition: `all 120ms ${T.ease}`,
+              }}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+        <div style={{ width: 1, height: 22, background: T.line }} />
+        <FilterPill icon="map-pin" label="Within 5 mi" />
+        <FilterPill icon="banknote" label="Any budget" />
+        <FilterPill icon="calendar" label="Any timing" />
+        <span style={{ flex: 1 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.mute }}>
+          Sort
+          <button
+            onClick={() => setSort(sort === "distance" ? "budget" : "distance")}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 8px",
+              borderRadius: 6,
+              background: T.paper2,
+              border: "none",
+              cursor: "pointer",
+              fontFamily: T.sans,
+              fontSize: 12.5,
+              fontWeight: 500,
+              color: T.ink,
+            }}
+          >
+            {sort === "distance" ? "Closest first" : "Highest budget"}
+            <Icon name="chevrons-up-down" size={12} />
+          </button>
+        </div>
+      </Card>
+
+      {/* Count strip */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: T.mute }}>
+        <span>
+          <b style={{ color: T.ink, fontWeight: 500 }}>{sorted.length}</b> leads matching
+        </span>
+        <span>·</span>
+        <span>
+          <b style={{ color: T.coral, fontWeight: 500 }}>
+            {sorted.filter((l) => !l.closed && l.contactedCount < 3).length}
+          </b>{" "}
+          still open to first contacts
+        </span>
+        <span>·</span>
+        <span>
+          Within {MARCUS.radiusMiles} mi of {MARCUS.postcode}
+        </span>
+      </div>
+
+      {/* Grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        {sorted.map((l) => (
+          <LeadCard
+            key={l.id}
+            lead={l}
+            revealed={!!revealed[l.id]}
+            onContact={() => {
+              if (l.closed) {
+                onShowToast({ icon: "lock", text: "This lead is closed — 5 trades have already made contact." });
+                return;
+              }
+              setRevealed((r) => ({ ...r, [l.id]: true }));
+              onShowToast({ icon: "phone", text: `Contact recorded. You're trade #${l.contactedCount + 1} of 5.` });
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function FilterPill({ icon, label }: { icon: string; label: string }) {
+  return (
+    <button
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        borderRadius: 8,
+        border: `1px solid ${T.line}`,
+        background: T.white,
+        cursor: "pointer",
+        fontFamily: T.sans,
+        fontSize: 12.5,
+        fontWeight: 400,
+        color: T.slate,
+      }}
+    >
+      <Icon name={icon} size={13} color={T.mute} />
+      {label}
+      <Icon name="chevron-down" size={12} color={T.mute} />
+    </button>
+  );
+}
+
+function LeadCard({ lead, revealed, onContact }: { lead: Lead; revealed: boolean; onContact: () => void }) {
+  const closed = lead.closed;
+  const slotsLeft = lead.contactedMax - lead.contactedCount;
+  return (
+    <Card hover style={{ padding: 0, opacity: closed ? 0.7 : 1, position: "relative", overflow: "hidden" }}>
+      {lead.hot && !closed && (
+        <div
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            background: T.coral,
+            color: T.white,
+            padding: "3px 8px",
+            borderRadius: 9999,
+            fontSize: 10.5,
+            fontWeight: 600,
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: 9999,
+              background: T.white,
+              animation: "fx-pulse 1.6s ease-in-out infinite",
+            }}
+          />
+          New
+        </div>
+      )}
+      <div style={{ padding: 16, paddingBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span className="fx-mono" style={{ fontSize: 11, color: T.mute }}>
+            {lead.id}
+          </span>
+          <span style={{ width: 3, height: 3, borderRadius: 9999, background: T.line }} />
+          <Badge tone="soft" size="sm">{lead.trade}</Badge>
+          {closed && (
+            <Badge tone="neutral" size="sm" icon="lock">
+              Closed
+            </Badge>
+          )}
+        </div>
+
+        <div style={{ fontSize: 15, fontWeight: 500, color: T.ink, lineHeight: 1.4 }}>{lead.title}</div>
+        <div
+          style={{
+            fontSize: 13,
+            color: T.slate,
+            marginTop: 6,
+            lineHeight: 1.5,
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {lead.desc}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: 12,
+            marginTop: 14,
+            paddingTop: 12,
+            borderTop: `1px solid ${T.line}`,
+          }}
+        >
+          <MetaItem icon="map-pin" label="Location" value={lead.postcode} sub={`${lead.distance} mi away`} />
+          <MetaItem icon="banknote" label="Budget" value={`£${lead.budgetMin}–£${lead.budgetMax}`} sub={lead.timing} />
+          <MetaItem icon="user" label="Customer" value={lead.customer} sub={`Posted ${lead.posted}`} />
+        </div>
+      </div>
+
+      {/* Competition strip */}
+      <div
+        style={{
+          padding: "10px 16px",
+          background: T.paper,
+          borderTop: `1px solid ${T.line}`,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <div style={{ display: "flex", gap: 3, flex: 1 }}>
+          {Array.from({ length: lead.contactedMax }).map((_, i) => (
+            <div
+              key={i}
+              style={{
+                flex: 1,
+                height: 4,
+                borderRadius: 9999,
+                background: i < lead.contactedCount ? T.coral : T.line,
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: T.mute, fontFamily: T.mono, whiteSpace: "nowrap" }}>
+          {lead.contactedCount}/{lead.contactedMax} contacted
+        </div>
+      </div>
+
+      {/* Action row */}
+      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${T.line}` }}>
+        {revealed ? (
+          <>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 12.5, color: T.slate, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <Icon name="phone" size={12} color={T.coral} />
+                <span className="fx-mono" style={{ color: T.ink, fontWeight: 500 }}>
+                  +44 7700 900{lead.id.slice(-3)}
+                </span>
+              </span>
+              <span style={{ fontSize: 12.5, color: T.slate, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <Icon name="mail" size={12} color={T.coral} />
+                <span className="fx-mono" style={{ color: T.ink, fontWeight: 500 }}>
+                  {lead.customer.toLowerCase().split(" ")[0]}@…
+                </span>
+              </span>
+            </div>
+            <Badge tone="success" icon="check">Contact recorded</Badge>
+          </>
+        ) : (
+          <>
+            <div style={{ flex: 1, fontSize: 12, color: T.mute }}>
+              {closed
+                ? "Closed — 5 trades already reached out."
+                : `${slotsLeft} contact slot${slotsLeft === 1 ? "" : "s"} left · first-come basis.`}
+            </div>
+            <Button variant="ghost" size="sm">Skip</Button>
+            <Button variant="primary" size="sm" icon="phone" onClick={onContact} disabled={closed}>
+              Contact customer
+            </Button>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function MetaItem({ icon, label, value, sub }: { icon: string; label: string; value: ReactNode; sub?: ReactNode }) {
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: T.mute, marginBottom: 4 }}>
+        <Icon name={icon} size={11} /> {label}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: T.ink, lineHeight: 1.2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ============================================================
+// AVAILABLE JOBS
+// ============================================================
+export function AvailableJobsView({ onShowToast }: { onShowToast: ShowToast }) {
+  const [accepted, setAccepted] = useState<Record<string, boolean>>({});
+  const [emergencyOnly, setEmergencyOnly] = useState(false);
+
+  const jobs = AVAILABLE_JOBS.filter((j) => !emergencyOnly || j.emergency);
+
+  return (
+    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18, flex: 1, overflow: "auto" }}>
+      <SectionHeader
+        title="Available jobs"
+        subtitle="Fixfy-quoted work, customer's already signed off. First to accept wins."
+        actions={<Toggle on={emergencyOnly} onChange={setEmergencyOnly} label="Emergency only" />}
+      />
+
+      <Card style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <FilterPill icon="briefcase" label="All trades" />
+        <FilterPill icon="map-pin" label="Within 5 mi" />
+        <FilterPill icon="banknote" label="£75–£500" />
+        <FilterPill icon="calendar" label="Any timing" />
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12.5, color: T.mute }}>
+          <b style={{ color: T.ink, fontWeight: 500 }}>{jobs.length}</b> jobs · sorted by best match
+        </span>
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        {jobs.map((j) => (
+          <AvailableJobCard
+            key={j.id}
+            job={j}
+            accepted={!!accepted[j.id]}
+            onAccept={() => {
+              setAccepted((a) => ({ ...a, [j.id]: true }));
+              onShowToast({ icon: "check-circle-2", text: `Accepted ${j.id}. Customer notified, moved to My jobs.` });
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AvailableJobCard({ job, accepted, onAccept }: { job: AvailableJob; accepted: boolean; onAccept: () => void }) {
+  const [timer, setTimer] = useState((job.expiresMin ?? 0) * 60);
+  useEffect(() => {
+    if (!job.emergency) return;
+    const id = setInterval(() => setTimer((t) => Math.max(0, t - 1)), 1000);
+    return () => clearInterval(id);
+  }, [job.emergency]);
+  const mm = String(Math.floor(timer / 60)).padStart(2, "0");
+  const ss = String(timer % 60).padStart(2, "0");
+
+  return (
+    <Card
+      hover
+      style={{
+        padding: 0,
+        position: "relative",
+        overflow: "hidden",
+        borderColor: job.emergency ? T.coral : T.line,
+        borderWidth: job.emergency ? 1.5 : 1,
+      }}
+    >
+      {job.emergency && (
+        <div
+          style={{
+            padding: "6px 14px",
+            background: T.coral,
+            color: T.white,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 11.5,
+            fontWeight: 500,
+            letterSpacing: 0.2,
+          }}
+        >
+          <Icon name="zap" size={13} />
+          <span>
+            EMERGENCY · expires in{" "}
+            <span className="fx-mono" style={{ fontWeight: 600 }}>
+              {mm}:{ss}
+            </span>
+          </span>
+          <span style={{ flex: 1 }} />
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 9999,
+              background: T.white,
+              animation: "fx-pulse 1s ease-in-out infinite",
+            }}
+          />
+        </div>
+      )}
+      <div style={{ padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span className="fx-mono" style={{ fontSize: 11, color: T.mute }}>
+            {job.id}
+          </span>
+          <span style={{ width: 3, height: 3, borderRadius: 9999, background: T.line }} />
+          <Badge tone="soft" size="sm">{job.trade}</Badge>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 500, color: T.ink, lineHeight: 1.4 }}>{job.title}</div>
+            <div
+              style={{
+                fontSize: 13,
+                color: T.slate,
+                marginTop: 6,
+                lineHeight: 1.5,
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {job.desc}
+            </div>
+          </div>
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
+            <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 500, color: T.navy, lineHeight: 1 }}>
+              {formatGBP(job.total)}
+            </div>
+            <div style={{ fontSize: 10.5, color: T.mute, marginTop: 4, letterSpacing: 0.3 }}>INC VAT</div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: 12,
+            marginTop: 14,
+            paddingTop: 12,
+            borderTop: `1px solid ${T.line}`,
+          }}
+        >
+          <MetaItem icon="map-pin" label="Location" value={job.postcode} sub={`${job.distance} mi away`} />
+          <MetaItem icon="clock" label="Duration" value={job.duration} sub={job.timing} />
+          <MetaItem icon="user" label="Customer" value="Pre-vetted" sub="Address on accept" />
+        </div>
+
+        <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 10 }}>
+          <Button variant="ghost" size="sm" icon="map">View on map</Button>
+          <span style={{ flex: 1 }} />
+          {accepted ? (
+            <Badge tone="success" icon="check-circle-2">Accepted — moved to My jobs</Badge>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm">Skip</Button>
+              <Button variant={job.emergency ? "primary" : "dark"} size="sm" icon="check" onClick={onAccept}>
+                Accept job
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================
+// AVAILABLE QUOTES
+// ============================================================
+export function AvailableQuotesView({ onShowToast }: { onShowToast: ShowToast }) {
+  const partner = usePartner();
+  const [tab, setTab] = useState<QuoteRequestStatus>("to-quote");
+  const [submitFor, setSubmitFor] = useState<QuoteRequest | null>(null);
+  const [quotes, setQuotes] = useState<QuoteRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setQuotes(await fetchAvailableQuotes(createClient(), partner.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load quotes");
+    } finally {
+      setLoading(false);
+    }
+  }, [partner.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const segments: Record<QuoteRequestStatus, QuoteRequest[]> = {
+    "to-quote": quotes.filter((q) => q.status === "to-quote"),
+    submitted: quotes.filter((q) => q.status === "submitted"),
+    won: quotes.filter((q) => q.status === "won"),
+    lost: quotes.filter((q) => q.status === "lost"),
+  };
+
+  const tabs = [
+    { id: "to-quote", label: "To quote", count: segments["to-quote"].length },
+    { id: "submitted", label: "Submitted", count: segments.submitted.length },
+    { id: "won", label: "Won", count: segments.won.length },
+    { id: "lost", label: "Lost", count: segments.lost.length },
+  ];
+
+  return (
+    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18, flex: 1, overflow: "auto" }}>
+      <SectionHeader
+        title="Available quotes"
+        subtitle="Fixfy clients needing a custom estimate. Submit a number, win the work."
+      />
+
+      <Tabs tabs={tabs} active={tab} onChange={(id) => setTab(id as QuoteRequestStatus)} variant="pills" />
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {loading ? (
+          <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="loader" size={14} color={T.mute} /> Loading quotes…
+          </div>
+        ) : error ? (
+          <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+            <div style={{ fontSize: 13, color: T.coral }}>{error}</div>
+            <Button variant="secondary" size="sm" icon="refresh-cw" onClick={load}>
+              Retry
+            </Button>
+          </div>
+        ) : segments[tab].length === 0 ? (
+          <EmptyState
+            icon="file-text"
+            title={tab === "lost" ? "Nothing lost recently" : "Nothing here yet"}
+            hint={
+              tab === "lost"
+                ? "When a customer picks someone else, those quotes land here."
+                : "Quote requests you're invited to bid on will appear here."
+            }
+          />
+        ) : (
+          segments[tab].map((q) => <QuoteRow key={q.id} q={q} status={tab} onSubmit={() => setSubmitFor(q)} />)
+        )}
+      </div>
+
+      {submitFor && (
+        <SubmitQuoteModal
+          quote={submitFor}
+          partnerName={partner.tradingName || `${partner.firstName} ${partner.lastName}`.trim()}
+          partnerId={partner.id}
+          onClose={() => setSubmitFor(null)}
+          onSubmitted={() => {
+            setSubmitFor(null);
+            onShowToast({ icon: "send", text: "Quote submitted. We'll notify you the moment the customer decides." });
+            void load();
+          }}
+          onError={(msg) => onShowToast({ icon: "alert-triangle", tone: "coral", text: msg })}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuoteRow({ q, status, onSubmit }: { q: QuoteRequest; status: QuoteRequestStatus; onSubmit: () => void }) {
+  return (
+    <Card style={{ padding: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 16, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span className="fx-mono" style={{ fontSize: 11, color: T.mute }}>
+              {q.reference ?? q.id.slice(0, 8)}
+            </span>
+            {q.trades.map((t) => (
+              <Badge key={t} tone="soft" size="sm">{t}</Badge>
+            ))}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: T.ink }}>{q.title}</div>
+          <div style={{ fontSize: 13, color: T.slate, marginTop: 6, lineHeight: 1.5 }}>{q.desc}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 10, fontSize: 12, color: T.mute }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <Icon name="map-pin" size={12} /> {q.postcode} · <span className="fx-mono">{q.distance} mi</span>
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <Icon name="calendar" size={12} /> Deadline {q.deadline}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, minWidth: 200 }}>
+          {status === "submitted" && q.yourBid != null && q.leadingBid != null && (
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, color: T.mute, marginBottom: 2 }}>YOUR BID</div>
+              <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 500, color: T.navy }}>{formatGBP(q.yourBid)}</div>
+              <div style={{ fontSize: 11, color: q.yourBid > q.leadingBid ? T.amber : T.green, marginTop: 2 }}>
+                {q.yourBid > q.leadingBid
+                  ? `Leading bid £${q.leadingBid} — £${q.yourBid - q.leadingBid} ahead of you`
+                  : "You're leading"}
+              </div>
+            </div>
+          )}
+          {status === "won" && q.awardedAmount != null && (
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, color: T.green, marginBottom: 2, fontWeight: 600, letterSpacing: 0.4 }}>WON</div>
+              <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 500, color: T.navy }}>
+                {formatGBP(q.awardedAmount)}
+              </div>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            {status === "to-quote" && (
+              <>
+                <Button variant="secondary" size="sm" icon="calendar">Book visit</Button>
+                <Button variant="primary" size="sm" icon="send" onClick={onSubmit}>Submit quote</Button>
+              </>
+            )}
+            {status === "submitted" && (
+              <>
+                <Button variant="secondary" size="sm">Withdraw</Button>
+                <Button variant="dark" size="sm" icon="pencil">Update bid</Button>
+              </>
+            )}
+            {status === "won" && <Button variant="primary" size="sm" icon="arrow-right">Open job</Button>}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SubmitQuoteModal({
+  quote,
+  partnerName,
+  partnerId,
+  onClose,
+  onSubmitted,
+  onError,
+}: {
+  quote: QuoteRequest;
+  partnerName: string;
+  partnerId: string;
+  onClose: () => void;
+  onSubmitted: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [labour, setLabour] = useState("");
+  const [materials, setMaterials] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const total = (parseFloat(labour) || 0) + (parseFloat(materials) || 0);
+
+  const send = async () => {
+    if (total <= 0) {
+      onError("Enter a labour or materials amount before sending.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await submitBid(createClient(), { quoteId: quote.id, partnerId, partnerName, amount: total, notes });
+      onSubmitted();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Couldn't submit quote");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal title={`Submit quote — ${quote.reference ?? quote.id.slice(0, 8)}`} onClose={onClose}>
+      <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ fontSize: 13, color: T.slate, lineHeight: 1.5 }}>
+          <b style={{ color: T.ink, fontWeight: 500 }}>{quote.title}</b>
+          <br />
+          {quote.desc}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Field label="Labour (£ inc VAT)">
+            <Input value={labour} onChange={setLabour} prefix="£" />
+          </Field>
+          <Field label="Materials (£ inc VAT)">
+            <Input value={materials} onChange={setMaterials} prefix="£" />
+          </Field>
+        </div>
+
+        <div
+          style={{
+            padding: 14,
+            background: T.paper,
+            borderRadius: 10,
+            border: `1px solid ${T.line}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 11, color: T.mute, letterSpacing: 0.4 }}>YOUR TOTAL</div>
+            <div style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 500, color: T.navy }}>{formatGBPdec(total)}</div>
+          </div>
+          <div style={{ fontSize: 12, color: T.mute, textAlign: "right" }}>
+            <div>Net-7 from sign-off</div>
+            <div className="fx-mono">~{formatGBP(total * 0.83)} after VAT</div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Field label="Estimated duration">
+            <Input value="1.5 days" suffix="hrs/days" />
+          </Field>
+          <Field label="Earliest start">
+            <Input value="Tue 26 May" icon="calendar" />
+          </Field>
+        </div>
+
+        <Field label="Cover note (optional)">
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Anything the customer should know — site visit recommended, materials assumptions, exclusions…"
+            style={{
+              width: "100%",
+              minHeight: 70,
+              padding: 10,
+              borderRadius: 8,
+              border: `1px solid ${T.line}`,
+              fontFamily: T.sans,
+              fontSize: 13,
+              color: T.ink,
+              outline: "none",
+              resize: "vertical",
+              boxSizing: "border-box",
+            }}
+          />
+        </Field>
+
+        <Field label="Attach PDF quote (optional)">
+          <div
+            style={{
+              padding: 14,
+              border: `1.5px dashed ${T.line}`,
+              borderRadius: 8,
+              textAlign: "center",
+              color: T.mute,
+              fontSize: 12.5,
+              cursor: "pointer",
+            }}
+          >
+            <Icon name="upload" size={16} color={T.mute} />
+            <span style={{ marginLeft: 8 }}>
+              Drag a PDF, or <span style={{ color: T.coral, fontWeight: 500 }}>browse</span>
+            </span>
+          </div>
+        </Field>
+      </div>
+
+      <div
+        style={{
+          padding: 16,
+          borderTop: `1px solid ${T.line}`,
+          background: T.paper,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <div style={{ flex: 1, fontSize: 12, color: T.mute }}>Editable until the customer decides.</div>
+        <Button variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button variant="primary" icon="send" onClick={send} disabled={submitting || total <= 0}>
+          {submitting ? "Sending…" : "Send quote"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}

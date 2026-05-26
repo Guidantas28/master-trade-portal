@@ -1,0 +1,95 @@
+/* Fixfy Trade Portal — base styles.
+   Ported from the design prototype (trade-portal/index.html <style>).
+   The UI is built with inline styles + the `T` token object (see src/lib/tokens.ts),
+   so this file only carries the reset, fonts, scrollbar, helpers and keyframes. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #f7f7fb;
+  color: #0a0a1f;
+  font-family: var(--font-geist), Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app-root {
+  height: 100vh;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #e4e4ec;
+  border-radius: 9999px;
+  border: 2px solid #f7f7fb;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #cdcdd8;
+}
+
+.fx-mono {
+  font-family: var(--font-geist-mono), "JetBrains Mono", ui-monospace, monospace;
+}
+
+@keyframes fx-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+@keyframes fx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes fx-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fx-slide-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes fx-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fx-rise {
+  animation: fx-rise 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.fx-fade {
+  animation: fx-fade-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}

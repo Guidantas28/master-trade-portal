@@ -1,0 +1,64 @@
+// Maps a real Fixfy OS `partners` row to the portal's `Partner` UI type.
+//
+// The DB shape (company_name, contact_name, single `trade`, location…) differs from the
+// design's richer partner model, so some fields are derived and a few are placeholders
+// until the schema gains them (trial/subscription land with the Stripe phase; bio,
+// postcode, radius, years-experience aren't columns yet).
+
+import type { Partner, Trade } from "@/types";
+
+export interface PartnerRow {
+  id: string;
+  company_name: string | null;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  trade: string | null;
+  rating: number | null;
+  jobs_completed: number | null;
+  location: string | null;
+  partner_address: string | null;
+  // present once the subscription migration lands:
+  trial_ends_at?: string | null;
+  subscription_status?: string | null;
+}
+
+function initialsFrom(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function daysUntil(iso?: string | null): number {
+  if (!iso) return 0;
+  const ms = new Date(iso).getTime() - Date.now();
+  return ms <= 0 ? 0 : Math.ceil(ms / 86_400_000);
+}
+
+export function mapPartner(row: PartnerRow): Partner {
+  const contact = row.contact_name?.trim() || row.company_name?.trim() || "Partner";
+  const [firstName, ...rest] = contact.split(/\s+/);
+  const primary = (row.trade?.trim() || "General Maintenance") as Trade;
+
+  return {
+    id: row.id,
+    firstName: firstName || contact,
+    lastName: rest.join(" "),
+    email: row.email || "",
+    phone: row.phone || "",
+    initials: initialsFrom(contact),
+    avatarBg: "#020040",
+    trades: [primary],
+    primaryTrade: primary,
+    postcode: (row.location || row.partner_address || "").trim(),
+    radiusMiles: 8, // no column yet — sensible default
+    tradingName: row.company_name || contact,
+    trialDaysLeft: daysUntil(row.trial_ends_at),
+    trialEndsOn: row.trial_ends_at ? new Date(row.trial_ends_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "",
+    yearsExperience: 0,
+    bio: "",
+    rating: row.rating ?? 0,
+    ratingsCount: row.jobs_completed ?? 0,
+  };
+}

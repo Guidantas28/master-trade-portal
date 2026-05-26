@@ -1,0 +1,29 @@
+{
+  "name": "fixfy-trade-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fixfy Trade Portal — desktop web app for trades (partners) to receive distributed leads and work. Shares the Fixfy OS (master-os) database structure.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.9.0",
+    "@supabase/supabase-js": "^2.98.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.1.6",
+    "stripe": "^20.4.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "resend": "^6.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}

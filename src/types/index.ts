@@ -1,0 +1,185 @@
+// Domain types for the Fixfy Trade Portal.
+//
+// These are shaped to mirror the Fixfy OS (master-os) Supabase structure so the
+// UI built against mock data can be wired to the real database with minimal change.
+// DB-mapping notes are inline; see src/lib/supabase/README for the wiring plan.
+
+export type Trade =
+  | "Plumbing"
+  | "General Maintenance"
+  | "Light Carpentry"
+  | "Electrical"
+  | "Painting & Decorating"
+  | "Tiling"
+  | "Plastering"
+  | "Flooring";
+
+// master-os: jobs.status
+export type JobStatus = "scheduled" | "in_progress" | "awaiting_signoff" | "completed";
+
+// Where a job originated. master-os: jobs.source / derived from request|quote linkage.
+export type JobSource = "job" | "lead" | "quote";
+
+export type ScheduleStatus = JobStatus | "awaiting" | "block";
+
+// master-os: partners (the authenticated trade). "Marcus" seed maps here.
+export interface Partner {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  initials: string;
+  avatarBg: string;
+  trades: Trade[];
+  primaryTrade: Trade;
+  postcode: string;
+  radiusMiles: number;
+  tradingName: string;
+  trialDaysLeft: number;
+  trialEndsOn: string;
+  yearsExperience: number;
+  bio: string;
+  rating: number;
+  ratingsCount: number;
+}
+
+// master-os: clients / contacts on a job.
+export interface Customer {
+  id: string;
+  name: string;
+  initials: string;
+  priorJobs: number;
+  address: string;
+  postcode: string;
+}
+
+// master-os: service_requests not yet quoted (lead-distribution concept — max 5 trades contact).
+export interface Lead {
+  id: string;
+  title: string;
+  desc: string;
+  trade: Trade;
+  emergency: boolean;
+  postcode: string;
+  distance: number;
+  budgetMin: number;
+  budgetMax: number;
+  timing: string;
+  customer: string;
+  contactedCount: number;
+  contactedMax: number;
+  posted: string;
+  winnable?: boolean;
+  hot?: boolean;
+  closed?: boolean;
+}
+
+// master-os: jobs that are quoted + customer-signed-off, open to first trade to accept.
+export interface AvailableJob {
+  id: string;
+  title: string;
+  desc: string;
+  trade: Trade;
+  emergency: boolean;
+  expiresMin?: number;
+  postcode: string;
+  distance: number;
+  duration: string;
+  total: number;
+  timing: string;
+}
+
+export type QuoteRequestStatus = "to-quote" | "submitted" | "won" | "lost";
+
+// master-os: quotes (quote_type = 'partner') / partner bids.
+export interface QuoteRequest {
+  id: string; // real quotes.id (uuid) — used to submit a bid
+  reference?: string; // human-facing code (quotes.reference)
+  title: string;
+  desc: string;
+  trades: Trade[];
+  postcode: string;
+  distance: number;
+  deadline: string;
+  status: QuoteRequestStatus;
+  yourBid?: number;
+  leadingBid?: number;
+  awardedAmount?: number;
+}
+
+// master-os: jobs assigned to this partner (partner_id).
+export interface MyJob {
+  id: string;
+  source: JobSource;
+  title: string;
+  desc: string;
+  trade: Trade;
+  customer: Customer;
+  postcode: string;
+  distance: number;
+  status: JobStatus;
+  startedAt?: string;
+  scheduled?: string;
+  scheduledDate?: string; // raw ISO date (YYYY-MM-DD) for filtering/sorting
+  scheduledStartAt?: string; // raw ISO timestamp for calendar placement
+  scheduledEndAt?: string; // raw ISO timestamp for calendar placement
+  completed?: string;
+  completedDate?: string; // raw ISO date (YYYY-MM-DD) for KPI windows
+  durationEst: string;
+  total: number;
+  labour: number;
+  materials: number;
+  vat: boolean;
+  progress?: number;
+  checklistDone: number;
+  checklistTotal: number;
+  beforePhotos: number;
+  afterPhotos: number;
+  notesAdded?: boolean;
+  signed?: boolean;
+  elapsed?: string;
+  accessNotes?: string;
+  parkingNotes?: string;
+  signoffLink?: string;
+  rating?: number;
+  ratingComment?: string;
+  selfBillOn?: string;
+}
+
+export type ActivityTone = "coral" | "amber" | "green" | "navy";
+
+export interface ActivityItem {
+  id: string;
+  type: string;
+  when: string;
+  icon: string;
+  tone: ActivityTone;
+  text: string;
+  meta?: string;
+}
+
+export interface ScheduleEvent {
+  day: number;
+  start: string;
+  end: string;
+  title: string;
+  status: ScheduleStatus;
+  customer: string;
+  jobId: string;
+}
+
+export interface ChecklistItem {
+  id: number;
+  label: string;
+  done: boolean;
+  required: boolean;
+  note?: string;
+}
+
+export interface Kpis {
+  thisWeek: { value: number; delta: string; trend: number[] };
+  newLeads: { value: number; delta: string };
+  available: { value: number; delta: string };
+  active: { value: number; delta: string };
+}

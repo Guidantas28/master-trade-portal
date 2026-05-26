@@ -1,0 +1,515 @@
+"use client";
+
+// Dashboard — greeting, trial nudge, KPI strip, today's schedule, activity feed, mini cards.
+// Wired to the partner's real jobs (useMyJobs). KPIs/activity/today are derived from those
+// rows; supply-side metrics (new leads, available jobs) return once those tables/screens land.
+
+import { useMemo, useState, type ReactNode } from "react";
+import { T } from "@/lib/tokens";
+import { Badge, Button, Card, Icon, IconButton, StatCard, StatusDot } from "@/components/ui/primitives";
+import { formatGBP } from "@/lib/format";
+import { usePartner } from "@/components/partner-context";
+import { useMyJobs } from "@/components/jobs-context";
+import type { ActivityTone, MyJob } from "@/types";
+
+const LONDON = "Europe/London";
+function londonDate(d: Date): string {
+  // en-CA renders YYYY-MM-DD, matching the DB's date columns for safe string comparison.
+  return d.toLocaleDateString("en-CA", { timeZone: LONDON });
+}
+function daysAgoISO(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return londonDate(d);
+}
+
+interface DerivedActivity {
+  id: string;
+  icon: string;
+  tone: ActivityTone;
+  text: string;
+  meta?: string;
+  when: string;
+}
+
+function greetingWord(): string {
+  const hour = Number(new Date().toLocaleString("en-GB", { hour: "2-digit", hour12: false, timeZone: LONDON }));
+  if (hour < 12) return "Morning";
+  if (hour < 18) return "Afternoon";
+  return "Evening";
+}
+
+export function Dashboard({
+  onOpenJob,
+  onNav,
+}: {
+  onOpenJob: (id: string) => void;
+  onNav: (route: string) => void;
+}) {
+  const partner = usePartner();
+  const { jobs, loading, error, refresh } = useMyJobs();
+
+  const d = useMemo(() => {
+    const today = londonDate(new Date());
+    const todayJobs = jobs
+      .filter((j) => j.scheduledDate === today)
+      .sort((a, b) => (a.scheduled ?? "").localeCompare(b.scheduled ?? ""));
+
+    // This week's earnings = rolling 7-day window of completed jobs; trend is the daily breakdown.
+    const trendDays = Array.from({ length: 7 }, (_, i) => daysAgoISO(6 - i));
+    const trend = trendDays.map((day) =>
+      jobs.filter((j) => j.status === "completed" && j.completedDate === day).reduce((s, j) => s + j.total, 0),
+    );
+    const weekEarnings = trend.reduce((s, n) => s + n, 0);
+
+    const active = jobs.filter((j) => j.status === "scheduled" || j.status === "in_progress");
+    const awaiting = jobs.filter((j) => j.status === "awaiting_signoff");
+    const since30 = daysAgoISO(30);
+    const completed30 = jobs.filter((j) => j.status === "completed" && (j.completedDate ?? "") >= since30);
+    const pendingPayout = awaiting.reduce((s, j) => s + j.total, 0);
+    const todayTotal = todayJobs.reduce((s, j) => s + j.total, 0);
+    const inProgress = jobs.find((j) => j.status === "in_progress");
+
+    return { today, todayJobs, trend, weekEarnings, active, awaiting, completed30, pendingPayout, todayTotal, inProgress };
+  }, [jobs]);
+
+  const activity = useMemo<DerivedActivity[]>(() => {
+    const items: (DerivedActivity & { sortKey: string })[] = [];
+    for (const j of jobs) {
+      if (j.status === "completed" && j.completedDate) {
+        items.push({
+          id: `c-${j.id}`,
+          icon: "circle-check",
+          tone: "green",
+          text: `Completed ${j.title}`,
+          meta: `${j.customer.name} · ${formatGBP(j.total)}`,
+          when: j.completed ?? "",
+          sortKey: j.completedDate,
+        });
+      } else if (j.status === "awaiting_signoff") {
+        items.push({
+          id: `a-${j.id}`,
+          icon: "clock",
+          tone: "amber",
+          text: `Awaiting sign-off — ${j.title}`,
+          meta: `${j.customer.name} · ${formatGBP(j.total)}`,
+          when: j.scheduled ?? "",
+          sortKey: j.scheduledDate ?? "9999",
+        });
+      } else if (j.status === "scheduled" && j.scheduledDate && j.scheduledDate >= d.today) {
+        items.push({
+          id: `s-${j.id}`,
+          icon: "calendar",
+          tone: "navy",
+          text: `Scheduled ${j.title}`,
+          meta: `${j.customer.name} · ${j.postcode}`,
+          when: j.scheduled ?? "",
+          sortKey: j.scheduledDate,
+        });
+      }
+    }
+    return items
+      .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+      .slice(0, 6)
+      .map(({ sortKey: _sortKey, ...rest }) => rest);
+  }, [jobs, d.today]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 24, color: T.mute, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon name="loader" size={16} color={T.mute} /> Loading your dashboard…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+        <div style={{ fontSize: 14, color: T.ink }}>Couldn&apos;t load your jobs: {error}</div>
+        <Button variant="secondary" size="sm" icon="refresh-cw" onClick={refresh}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  const todayLabel = new Date().toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: LONDON,
+  });
+
+  return (
+    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18, flex: 1, overflow: "auto" }}>
+      {/* Greeting */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: -0.4, color: T.navy }}>
+            {greetingWord()}, {partner.firstName}.
+          </div>
+          <div style={{ fontSize: 14, color: T.slate, marginTop: 4 }}>
+            <span style={{ color: T.coral, fontWeight: 500 }}>
+              {d.todayJobs.length} {d.todayJobs.length === 1 ? "job" : "jobs"} today
+            </span>{" "}
+            · {d.active.length} active
+            {partner.trialDaysLeft > 0 && (
+              <>
+                {" "}·{" "}
+                <span className="fx-mono" style={{ color: T.amber }}>
+                  {partner.trialDaysLeft} day{partner.trialDaysLeft === 1 ? "" : "s"}
+                </span>{" "}
+                left on trial
+              </>
+            )}
+            .
+          </div>
+        </div>
+        {d.inProgress && (
+          <Button variant="dark" icon="play" onClick={() => onOpenJob(d.inProgress!.id)}>
+            Resume current job
+          </Button>
+        )}
+      </div>
+
+      {/* Trial nudge banner — only while on trial */}
+      {partner.trialDaysLeft > 0 && (
+        <Card
+          style={{
+            padding: 14,
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            borderColor: T.amber50,
+            background: "linear-gradient(0deg, rgba(196,122,0,0.04), rgba(196,122,0,0.04)), #fff",
+          }}
+        >
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: T.amber50,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Icon name="zap" size={16} color={T.amber} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>
+              You&apos;ve earned{" "}
+              <span className="fx-mono" style={{ color: T.amber }}>
+                {formatGBP(d.weekEarnings)}
+              </span>{" "}
+              this week on trial. £99/mo keeps it flowing.
+            </div>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>
+              That&apos;s <b>0% commission</b> on your completed work.{" "}
+              {partner.trialDaysLeft} day{partner.trialDaysLeft === 1 ? "" : "s"} left on your trial.
+            </div>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => onNav("settings:billing")}>
+            Review plan
+          </Button>
+          <IconButton icon="x" size={28} tone="ghost" />
+        </Card>
+      )}
+
+      {/* KPI strip — all derived from real jobs */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 12 }}>
+        <StatCard
+          hero
+          label="This week's earnings"
+          value={formatGBP(d.weekEarnings)}
+          hint="Completed, last 7 days"
+          trend={d.trend}
+        />
+        <StatCard
+          label="Active jobs"
+          value={d.active.length}
+          hint="Scheduled + in progress"
+          icon="briefcase"
+          onClick={() => onNav("jobs")}
+        />
+        <StatCard
+          label="Awaiting sign-off"
+          value={d.awaiting.length}
+          hint={d.pendingPayout > 0 ? `${formatGBP(d.pendingPayout)} pending` : "Nothing pending"}
+          accent="coral"
+          icon="clock"
+          onClick={() => onNav("jobs")}
+        />
+        <StatCard
+          label="Completed"
+          value={d.completed30.length}
+          hint="Last 30 days"
+          icon="circle-check"
+          onClick={() => onNav("jobs")}
+        />
+      </div>
+
+      {/* Two-column */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
+        {/* Today's schedule */}
+        <Card>
+          <div style={{ padding: "14px 16px", display: "flex", alignItems: "center", borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 500, color: T.navy }}>Today&apos;s schedule</div>
+              <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{todayLabel}</div>
+            </div>
+            <Button variant="ghost" size="sm" iconRight="arrow-right" onClick={() => onNav("schedule")}>
+              Open calendar
+            </Button>
+          </div>
+          <div>
+            {d.todayJobs.map((j, i) => (
+              <ScheduleRow key={j.id} job={j} onClick={() => onOpenJob(j.id)} divider={i < d.todayJobs.length - 1} />
+            ))}
+            {d.todayJobs.length === 0 && (
+              <div style={{ padding: 24, color: T.mute, fontSize: 13, textAlign: "center" }}>
+                Free day. Maybe a coffee on Northcote Road.
+              </div>
+            )}
+            {d.todayJobs.length > 0 && (
+              <div
+                style={{
+                  padding: "12px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  borderTop: `1px solid ${T.line}`,
+                  background: T.paper,
+                }}
+              >
+                <Icon name="briefcase" size={14} color={T.mute} />
+                <span style={{ fontSize: 12, color: T.mute }}>
+                  <b style={{ color: T.ink, fontWeight: 500 }}>
+                    {d.todayJobs.length} {d.todayJobs.length === 1 ? "job" : "jobs"}
+                  </b>{" "}
+                  scheduled today
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 12, color: T.mute, fontFamily: T.mono }}>{formatGBP(d.todayTotal)} value</span>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Activity feed */}
+        <Card>
+          <div style={{ padding: "14px 16px", display: "flex", alignItems: "center", borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ flex: 1, fontSize: 15, fontWeight: 500, color: T.navy }}>Activity</div>
+            <Badge tone="coral" dot>
+              Live
+            </Badge>
+          </div>
+          <div>
+            {activity.map((a, i) => (
+              <ActivityRow key={a.id} a={a} divider={i < activity.length - 1} />
+            ))}
+            {activity.length === 0 && (
+              <div style={{ padding: 24, color: T.mute, fontSize: 13, textAlign: "center" }}>
+                No recent activity yet.
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Footer — three mini cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <MiniCard
+          icon="map-pin"
+          tone="navy"
+          title="Your service area"
+          line1={`${partner.postcode || "Set your area"} · ${partner.radiusMiles} mi radius`}
+          line2={`${d.active.length} active ${d.active.length === 1 ? "job" : "jobs"} in your patch`}
+          cta="Edit area"
+          onCta={() => onNav("settings:area")}
+        />
+        <MiniCard
+          icon="shield-check"
+          tone="green"
+          title="Compliance documents"
+          line1="Keep your insurance & certs up to date"
+          line2="Customers see verified trades first"
+          cta="Manage docs"
+          onCta={() => onNav("settings:docs")}
+        />
+        <MiniCard
+          icon="receipt"
+          tone="amber"
+          title="Pending payout"
+          line1={d.pendingPayout > 0 ? `${formatGBP(d.pendingPayout)} awaiting sign-off` : "Nothing pending"}
+          line2={`From ${d.awaiting.length} ${d.awaiting.length === 1 ? "job" : "jobs"} awaiting customer sign-off`}
+          cta="View self-bills"
+          onCta={() => onNav("settings:selfbill")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ScheduleRow({ job, onClick, divider }: { job: MyJob; onClick: () => void; divider: boolean }) {
+  const [h, setH] = useState(false);
+  const time = job.scheduled ? job.scheduled.split(", ")[1]?.split("–")[0] ?? "" : "";
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setH(true)}
+      onMouseLeave={() => setH(false)}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "90px 1fr auto",
+        alignItems: "center",
+        gap: 14,
+        padding: "14px 16px",
+        cursor: "pointer",
+        background: h ? "rgba(2,0,64,0.03)" : "transparent",
+        borderBottom: divider ? `1px solid ${T.line}` : "none",
+        transition: `background 120ms ${T.ease}`,
+      }}
+    >
+      <div className="fx-mono" style={{ fontSize: 12, color: T.slate, lineHeight: 1.3 }}>
+        <div style={{ color: T.ink, fontWeight: 500 }}>{time || "—"}</div>
+        <div style={{ color: T.mute, fontSize: 11 }}>{job.durationEst}</div>
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <StatusDot status={job.status} />
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 500,
+              color: T.ink,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {job.title}
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: T.mute, marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
+          <span>{job.customer.name}</span>
+          {job.postcode && (
+            <>
+              <span>·</span>
+              <span>{job.postcode}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 500, color: T.navy }}>{formatGBP(job.total)}</span>
+        <Icon name="chevron-right" size={14} color={T.mute} />
+      </div>
+    </div>
+  );
+}
+
+function ActivityRow({ a, divider }: { a: DerivedActivity; divider: boolean }) {
+  const toneMap: Record<string, { bg: string; fg: string }> = {
+    coral: { bg: T.coralTint, fg: T.coral },
+    amber: { bg: T.amber50, fg: T.amber },
+    green: { bg: T.green50, fg: T.green },
+    navy: { bg: T.paper2, fg: T.navy },
+  };
+  const t = toneMap[a.tone];
+  return (
+    <div style={{ display: "flex", gap: 10, padding: "12px 16px", borderBottom: divider ? `1px solid ${T.line}` : "none" }}>
+      <div
+        style={{
+          width: 26,
+          height: 26,
+          borderRadius: 7,
+          flexShrink: 0,
+          background: t.bg,
+          color: t.fg,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon name={a.icon} size={13} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.4 }}>{a.text}</div>
+        {a.meta && <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{a.meta}</div>}
+        {a.when && <div style={{ fontSize: 11, color: T.mute, marginTop: 3 }}>{a.when}</div>}
+      </div>
+    </div>
+  );
+}
+
+function MiniCard({
+  icon,
+  tone,
+  title,
+  line1,
+  line2,
+  cta,
+  onCta,
+}: {
+  icon: string;
+  tone: "navy" | "coral" | "amber" | "green";
+  title: string;
+  line1: ReactNode;
+  line2: ReactNode;
+  cta: string;
+  onCta: () => void;
+}) {
+  const toneMap = {
+    navy: { bg: T.paper2, fg: T.navy },
+    coral: { bg: T.coralTint, fg: T.coral },
+    amber: { bg: T.amber50, fg: T.amber },
+    green: { bg: T.green50, fg: T.green },
+  } as const;
+  const t = toneMap[tone];
+  return (
+    <Card style={{ padding: 16, display: "flex", alignItems: "flex-start", gap: 12 }}>
+      <div
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 9,
+          flexShrink: 0,
+          background: t.bg,
+          color: t.fg,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon name={icon} size={18} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{title}</div>
+        <div style={{ fontSize: 13, color: T.slate, marginTop: 4 }}>{line1}</div>
+        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>{line2}</div>
+        <button
+          onClick={onCta}
+          style={{
+            marginTop: 8,
+            padding: 0,
+            background: "transparent",
+            border: "none",
+            color: T.coral,
+            fontFamily: T.sans,
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          {cta} <Icon name="arrow-right" size={12} />
+        </button>
+      </div>
+    </Card>
+  );
+}

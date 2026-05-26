@@ -1,0 +1,74 @@
+"use client";
+
+// TradePortalApp — root shell, client-side router, drawer + onboarding state.
+// Ported from app.jsx. Navigation is internal state (faithful to the prototype);
+// real URL routes can be layered on in a later phase.
+
+import { useState } from "react";
+import { T } from "@/lib/tokens";
+import { Button } from "@/components/ui/primitives";
+import { useToast } from "@/components/ui/toast";
+import { Sidebar } from "@/components/shell/sidebar";
+import { TopBar } from "@/components/shell/topbar";
+import { Dashboard } from "@/components/screens/dashboard";
+import { AvailableJobsView, AvailableQuotesView, LeadsView } from "@/components/screens/opportunities";
+import { MyJobsView } from "@/components/screens/jobs";
+import { JobDrawer } from "@/components/screens/job-drawer";
+import { ScheduleView } from "@/components/screens/schedule";
+import { SettingsView, settingsPageLabel } from "@/components/screens/settings";
+import { Onboarding } from "@/components/screens/onboarding";
+
+const TITLES: Record<string, string> = {
+  dashboard: "Dashboard",
+  leads: "Leads",
+  available: "Available jobs",
+  quotes: "Available quotes",
+  jobs: "My jobs",
+  schedule: "Schedule",
+  settings: "Settings",
+};
+
+export function TradePortalApp() {
+  const [route, setRoute] = useState("dashboard");
+  const [drawerJobId, setDrawerJobId] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const toast = useToast();
+
+  const [page, subpage] = route.split(":");
+
+  const onNav = (id: string) => {
+    setDrawerJobId(null);
+    setRoute(id);
+  };
+  const handleOpenJob = (id: string) => setDrawerJobId(id);
+
+  return (
+    <div id="app-root" style={{ display: "flex", background: T.paper }}>
+      <Sidebar active={page} onNav={onNav} onOpenOnboarding={() => setShowOnboarding(true)} />
+
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        <TopBar
+          title={TITLES[page]}
+          breadcrumb={page === "settings" && subpage ? ["Settings", settingsPageLabel(subpage)] : []}
+          actions={
+            <Button variant="dark" icon="play-circle" onClick={() => setShowOnboarding(true)}>
+              Onboarding
+            </Button>
+          }
+        />
+
+        {page === "dashboard" && <Dashboard onOpenJob={handleOpenJob} onNav={onNav} />}
+        {page === "leads" && <LeadsView onShowToast={toast} />}
+        {page === "available" && <AvailableJobsView onShowToast={toast} />}
+        {page === "quotes" && <AvailableQuotesView onShowToast={toast} />}
+        {page === "jobs" && <MyJobsView onOpenJob={handleOpenJob} />}
+        {page === "schedule" && <ScheduleView onOpenJob={handleOpenJob} />}
+        {page === "settings" && <SettingsView initial={subpage || "profile"} />}
+      </main>
+
+      {drawerJobId && <JobDrawer jobId={drawerJobId} onClose={() => setDrawerJobId(null)} onShowToast={toast} />}
+
+      {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
+    </div>
+  );
+}
