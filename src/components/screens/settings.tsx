@@ -18,7 +18,7 @@ import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
 import { fetchPartnerDocuments, REQUIRED_PARTNER_DOCS, missingRequiredDocs, type PartnerDoc } from "@/lib/queries/partner-documents";
 import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
 import { fetchRateCard, saveRateCard, type ServicePrice } from "@/lib/queries/rate-card";
-import { useRegisterOnboardingSave } from "@/components/onboarding-save";
+import { useRegisterOnboardingSave, useIsOnboarding } from "@/components/onboarding-save";
 import {
   fetchPartnerSettings,
   savePartnerSettings,
@@ -306,6 +306,7 @@ export function TradesPage() {
   const partner = usePartner();
   const toast = useToast();
   const router = useRouter();
+  const inOnboarding = useIsOnboarding();
   const initialEnabled = partner.trades;
   const initialPrimary = partner.primaryTrade;
   const [enabled, setEnabled] = useState<Trade[]>(initialEnabled);
@@ -353,7 +354,9 @@ export function TradesPage() {
         throw new Error("Save was blocked. Make sure migration 198 is applied (partner self-update RLS).");
       }
       toast({ text: "Trades saved", icon: "check" });
-      router.refresh(); // re-fetch the partner context so the saved trades persist across navigation
+      // Don't refresh during onboarding — it re-runs the server page and closes the modal instead
+      // of advancing. In Settings it's fine and keeps the partner context current.
+      if (!inOnboarding) router.refresh();
       return true;
     } catch (e) {
       toast({ text: e instanceof Error ? e.message : "Couldn't save trades", icon: "alert-triangle", tone: "coral" });

@@ -4,7 +4,6 @@
 // Steps reuse several Settings pages (Trades, Area, Availability, Rates, Docs).
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { T } from "@/lib/tokens";
 import { OnboardingSaveProvider, useRegisterOnboardingSave, type OnboardingSaveFn } from "@/components/onboarding-save";
 import { Avatar, Badge, Button, Card, Field, Icon, Input, Modal } from "@/components/ui/primitives";
@@ -296,7 +295,6 @@ function WelcomeStep() {
 function DetailsStep() {
   const partner = usePartner();
   const toast = useToast();
-  const router = useRouter();
   const [firstName, setFirstName] = useState(partner.firstName);
   const [lastName, setLastName] = useState(partner.lastName);
   const [phone, setPhone] = useState(partner.phone);
@@ -316,7 +314,8 @@ function DetailsStep() {
       if (!res.ok) throw new Error(json.error || "Upload failed");
       setAvatarUrl(json.url ?? null);
       toast({ text: "Photo updated", icon: "check" });
-      router.refresh(); // propagate the new photo to the sidebar/dashboard
+      // No router.refresh() here — it would re-run the server page and close the onboarding modal.
+      // The photo shows immediately via local state; the sidebar/dashboard pick it up on next load.
     } catch (e) {
       toast({ text: e instanceof Error ? e.message : "Couldn't upload photo", icon: "alert-triangle", tone: "coral" });
     } finally {

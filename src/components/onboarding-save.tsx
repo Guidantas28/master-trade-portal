@@ -22,6 +22,13 @@ export function OnboardingSaveProvider({
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
+// True when the component is rendered inside the onboarding flow (vs. standalone in Settings).
+// Pages use this to skip router.refresh() during onboarding — refreshing re-runs the server page
+// and tears down the onboarding modal instead of advancing.
+export function useIsOnboarding(): boolean {
+  return useContext(Ctx) !== null;
+}
+
 // Register this step's save with the onboarding shell. No-op when rendered outside onboarding
 // (e.g. the same page in Settings). Registers a stable wrapper that always calls the latest closure.
 export function useRegisterOnboardingSave(fn: OnboardingSaveFn) {
