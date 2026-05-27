@@ -1000,6 +1000,82 @@ function BillingPage() {
 }
 
 // ---------- SELF-BILL ----------
+interface PayoutStatus {
+  connected: boolean;
+  payoutsEnabled: boolean;
+  detailsSubmitted: boolean;
+}
+
+function PayoutsCard() {
+  const toast = useToast();
+  const [status, setStatus] = useState<PayoutStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/payouts/status");
+        const json = await res.json();
+        if (!cancelled && res.ok) setStatus(json as PayoutStatus);
+      } catch {
+        /* leave null */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/payouts/connect", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || !json.url) throw new Error(json.error || "Couldn't start payout setup");
+      window.location.href = json.url;
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Payout setup failed", icon: "alert-triangle", tone: "coral" });
+      setBusy(false);
+    }
+  };
+
+  const enabled = status?.payoutsEnabled;
+  const started = status?.connected && !status.payoutsEnabled;
+
+  return (
+    <PageCard
+      title="Payouts"
+      subtitle="Bank details are held securely by Stripe — Fixfy never sees them."
+      action={enabled ? <Badge tone="success" icon="check">Payouts active</Badge> : started ? <Badge tone="warning">Setup incomplete</Badge> : undefined}
+    >
+      {loading ? (
+        <div style={{ color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="loader" size={14} color={T.mute} /> Checking payout status…
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+            <Icon name="banknote" size={18} color={T.navy} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>
+              {enabled ? "Connected — paid by bank transfer (Net-7)" : started ? "Finish connecting your bank to get paid" : "Connect your bank to receive payouts"}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>Secured by Stripe Connect.</div>
+          </div>
+          <Button variant={enabled ? "secondary" : "primary"} icon={enabled ? "pencil" : "arrow-right"} onClick={connect} disabled={busy}>
+            {busy ? "Opening…" : enabled ? "Manage" : started ? "Finish setup" : "Set up payouts"}
+          </Button>
+        </div>
+      )}
+    </PageCard>
+  );
+}
+
 function SelfBillPage() {
   const partner = usePartner();
   const [bills, setBills] = useState<SelfBill[]>([]);
@@ -1073,6 +1149,8 @@ function SelfBillPage() {
           </div>
         </Card>
       </div>
+
+      <PayoutsCard />
 
       <PageCard title="Past self-bills">
         {loading ? (
