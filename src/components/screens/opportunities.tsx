@@ -22,7 +22,19 @@ import { useMyJobs } from "@/components/jobs-context";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAvailableQuotes, submitBid } from "@/lib/queries/quotes";
 import { fetchAvailableJobs } from "@/lib/queries/available-jobs";
-import { fetchLeads, setLeadStatus, type RealLead } from "@/lib/queries/leads";
+interface PortalLead {
+  offerId: string; // service_request id
+  status: string;
+  title: string;
+  desc: string;
+  postcode: string;
+  budget: number | null;
+  priority: string | null;
+  requestKind: string | null;
+  posted: string | null;
+  contactedCount: number;
+  maxContacts: number;
+}
 import type { AvailableJob, QuoteRequest, QuoteRequestStatus } from "@/types";
 import type { ToastInput } from "@/components/ui/toast";
 
@@ -33,7 +45,7 @@ type ShowToast = (t: ToastInput) => void;
 // ============================================================
 export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
   const partner = usePartner();
-  const [leads, setLeads] = useState<RealLead[]>([]);
+  const [leads, setLeads] = useState<PortalLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -42,28 +54,39 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
     setLoading(true);
     setError(null);
     try {
-      setLeads(await fetchLeads(createClient(), partner.id));
+      const res = await fetch("/api/leads");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load leads");
+      setLeads((json.leads ?? []) as PortalLead[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load leads");
     } finally {
       setLoading(false);
     }
-  }, [partner.id]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const act = async (lead: RealLead, status: "contacted" | "declined") => {
+  const act = async (lead: PortalLead, status: "contacted" | "declined") => {
     setBusyId(lead.offerId);
     try {
-      await setLeadStatus(createClient(), lead.offerId, status);
+      const res = await fetch("/api/leads/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serviceRequestId: lead.offerId, status }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't update lead");
       if (status === "declined") {
         setLeads((prev) => prev.filter((l) => l.offerId !== lead.offerId));
         onShowToast({ icon: "x", text: "Lead declined." });
       } else {
-        setLeads((prev) => prev.map((l) => (l.offerId === lead.offerId ? { ...l, status: "contacted" } : l)));
-        onShowToast({ icon: "phone", text: "Marked as contacted. We've let the office know." });
+        setLeads((prev) =>
+          prev.map((l) => (l.offerId === lead.offerId ? { ...l, status: "contacted", contactedCount: l.contactedCount + 1 } : l)),
+        );
+        onShowToast({ icon: "phone", text: "Marked as contacted. The office can see you reached out." });
       }
     } catch (e) {
       onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't update lead" });
@@ -139,16 +162,33 @@ export function FilterPill({ icon, label }: { icon: string; label: string }) {
   );
 }
 
-function LeadCard({ lead, busy, onContact, onDecline }: { lead: RealLead; busy: boolean; onContact: () => void; onDecline: () => void }) {
+function leadTiming(priority: string | null, kind: string | null): { label: string; emergency: boolean } {
+  const p = (priority ?? "").toLowerCase();
+  if (/urgent|emergency|high/.test(p)) return { label: "Urgent", emergency: true };
+  if (kind === "work") return { label: "Ready to book", emergency: false };
+  if (kind === "quote") return { label: "Wants a quote", emergency: false };
+  return { label: p ? p.charAt(0).toUpperCase() + p.slice(1) : "Flexible", emergency: false };
+}
+function leadPosted(iso: string | null): string {
+  if (!iso) return "";
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 60) return `${Math.max(1, mins)}m ago`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function LeadCard({ lead, busy, onContact, onDecline }: { lead: PortalLead; busy: boolean; onContact: () => void; onDecline: () => void }) {
   const contacted = lead.status === "contacted";
+  const timing = leadTiming(lead.priority, lead.requestKind);
+  const slotsLeft = Math.max(0, lead.maxContacts - lead.contactedCount);
   return (
     <Card hover style={{ padding: 0, position: "relative", overflow: "hidden" }}>
       <div style={{ padding: 16, paddingBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <Badge tone={lead.emergency ? "coral" : "soft"} size="sm">{lead.timing}</Badge>
-          <span style={{ fontSize: 11.5, color: T.mute }}>Sent {lead.posted}</span>
+          <Badge tone={timing.emergency ? "coral" : "soft"} size="sm">{timing.label}</Badge>
+          {lead.posted && <span style={{ fontSize: 11.5, color: T.mute }}>Sent {leadPosted(lead.posted)}</span>}
           {contacted && (
-            <Badge tone="success" size="sm" icon="check">Contacted</Badge>
+            <Badge tone="success" size="sm" icon="check">You contacted</Badge>
           )}
         </div>
 
@@ -185,20 +225,32 @@ function LeadCard({ lead, busy, onContact, onDecline }: { lead: RealLead; busy: 
         </div>
       </div>
 
+      {/* Competition strip — closes once maxContacts trades reach out */}
+      <div style={{ padding: "10px 16px", background: T.paper, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", gap: 3, flex: 1 }}>
+          {Array.from({ length: lead.maxContacts }).map((_, i) => (
+            <div key={i} style={{ flex: 1, height: 4, borderRadius: 9999, background: i < lead.contactedCount ? T.coral : T.line }} />
+          ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: T.mute, fontFamily: T.mono, whiteSpace: "nowrap" }}>
+          {lead.contactedCount}/{lead.maxContacts} contacted
+        </div>
+      </div>
+
       {/* Action row */}
       <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${T.line}` }}>
         {contacted ? (
           <div style={{ flex: 1, fontSize: 12, color: T.slate, display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Icon name="phone" size={12} color={T.green} /> You marked this contacted.
+            <Icon name="phone" size={12} color={T.green} /> You reached out. {slotsLeft} slot{slotsLeft === 1 ? "" : "s"} left.
           </div>
         ) : (
           <>
+            <div style={{ flex: 1, fontSize: 12, color: T.mute }}>{slotsLeft} of {lead.maxContacts} contact slots left · first-come.</div>
             <Button variant="ghost" size="sm" onClick={onDecline} disabled={busy}>
               Decline
             </Button>
-            <span style={{ flex: 1 }} />
             <Button variant="primary" size="sm" icon="phone" onClick={onContact} disabled={busy}>
-              {busy ? "…" : "Mark contacted"}
+              {busy ? "…" : "Contact customer"}
             </Button>
           </>
         )}
