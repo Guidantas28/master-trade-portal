@@ -19,9 +19,13 @@ export interface PartnerRow {
   jobs_completed: number | null;
   location: string | null;
   partner_address: string | null;
-  // present once the subscription migration lands:
+  // present once their migrations land (read best-effort by partner-auth):
   trial_ends_at?: string | null;
   subscription_status?: string | null;
+  bio?: string | null;
+  years_experience?: number | null;
+  service_radius_miles?: number | null;
+  excluded_postcodes?: string[] | null;
 }
 
 function initialsFrom(name: string): string {
@@ -54,12 +58,13 @@ export function mapPartner(row: PartnerRow): Partner {
     trades: enabled,
     primaryTrade: primary,
     postcode: (row.location || row.partner_address || "").trim(),
-    radiusMiles: 8, // no column yet — sensible default
+    radiusMiles: row.service_radius_miles ?? 8,
     tradingName: row.company_name || contact,
     trialDaysLeft: daysUntil(row.trial_ends_at),
     trialEndsOn: row.trial_ends_at ? new Date(row.trial_ends_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "",
-    yearsExperience: 0,
-    bio: "",
+    yearsExperience: row.years_experience ?? 0,
+    bio: row.bio ?? "",
+    excludedPostcodes: row.excluded_postcodes ?? [],
     rating: row.rating ?? 0,
     ratingsCount: row.jobs_completed ?? 0,
   };

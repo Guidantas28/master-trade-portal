@@ -183,9 +183,8 @@ function ToggleRow({ on, onChange, label, hint }: { on: boolean; onChange: (v: b
 }
 
 // ---------- PROFILE ----------
-// Persists the columns the `partners` table actually has: contact_name (Name),
-// phone, company_name (Trading name). Fields without a backing column yet
-// (DOB, company number, VAT number, years experience, bio) are shown but not saved.
+// Persists the real partners columns: contact_name (Name), phone, company_name (Trading name),
+// bio and years_experience (migration 204). DOB/company number/VAT number have no column yet.
 function ProfilePage() {
   const partner = usePartner();
   const toast = useToast();
@@ -194,6 +193,8 @@ function ProfilePage() {
     lastName: partner.lastName,
     phone: partner.phone,
     tradingName: partner.tradingName,
+    bio: partner.bio ?? "",
+    years: partner.yearsExperience ? String(partner.yearsExperience) : "",
   };
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
@@ -204,10 +205,17 @@ function ProfilePage() {
     setSaving(true);
     try {
       const contactName = `${form.firstName} ${form.lastName}`.trim();
+      const years = form.years.trim() === "" ? null : Number(form.years.replace(/\D/g, "")) || null;
       const supabase = createClient();
       const { error } = await supabase
         .from("partners")
-        .update({ contact_name: contactName, phone: form.phone || null, company_name: form.tradingName || null })
+        .update({
+          contact_name: contactName,
+          phone: form.phone || null,
+          company_name: form.tradingName || null,
+          bio: form.bio || null,
+          years_experience: years,
+        })
         .eq("id", partner.id);
       if (error) throw error;
       toast({ text: "Profile saved", icon: "check" });
@@ -244,14 +252,14 @@ function ProfilePage() {
         <Row label="Trading name" hint="Sole trader name OR limited company name">
           <Input value={form.tradingName} onChange={set("tradingName")} />
         </Row>
-        <Row label="Years experience" hint="Not stored yet — coming soon">
-          <Input value={partner.yearsExperience ? String(partner.yearsExperience) : ""} placeholder="—" suffix="years" />
+        <Row label="Years experience">
+          <Input value={form.years} onChange={set("years")} placeholder="e.g. 12" suffix="years" />
         </Row>
-        <Row label="Public bio" hint="Not stored yet — coming soon">
+        <Row label="Public bio" hint="Shows on customer-facing reports">
           <textarea
-            value={partner.bio}
-            readOnly
-            placeholder="Shown on customer-facing reports once we add this field."
+            value={form.bio}
+            onChange={(e) => set("bio")(e.target.value)}
+            placeholder="A short intro customers see on your job reports."
             style={{
               width: "100%",
               minHeight: 80,
@@ -666,29 +674,62 @@ export function AvailabilityPage() {
 // ---------- SERVICE AREA ----------
 export function ServiceAreaPage() {
   const partner = usePartner();
+  const toast = useToast();
+  const initial = {
+    postcode: partner.postcode,
+    radius: partner.radiusMiles,
+    excluded: (partner.excludedPostcodes ?? []).join(", "),
+  };
+  const [form, setForm] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const excluded = form.excluded
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean);
+      const { error } = await createClient()
+        .from("partners")
+        .update({ location: form.postcode || null, service_radius_miles: form.radius, excluded_postcodes: excluded })
+        .eq("id", partner.id);
+      if (error) throw error;
+      toast({ text: "Service area saved", icon: "check" });
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Couldn't save service area", icon: "alert-triangle", tone: "coral" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       <SettingsHeader title="Service area" subtitle="Where you work. Bigger area = more matches, more drive time." />
       <PageCard title="Coverage">
         <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Row label="Base postcode" columns="1fr"><Input value={partner.postcode} icon="map-pin" placeholder="e.g. SW11 4PG" /></Row>
+            <Row label="Base postcode" columns="1fr">
+              <Input value={form.postcode} onChange={(v) => setForm((f) => ({ ...f, postcode: v }))} icon="map-pin" placeholder="e.g. SW11 4PG" />
+            </Row>
             <Row label="Radius" columns="1fr">
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input type="range" min={1} max={20} defaultValue={partner.radiusMiles} style={{ flex: 1, accentColor: T.coral }} />
+                <input
+                  type="range"
+                  min={1}
+                  max={20}
+                  value={form.radius}
+                  onChange={(e) => setForm((f) => ({ ...f, radius: Number(e.target.value) }))}
+                  style={{ flex: 1, accentColor: T.coral }}
+                />
                 <span className="fx-mono" style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>
-                  {partner.radiusMiles} mi
+                  {form.radius} mi
                 </span>
               </div>
             </Row>
-            <Row label="Extend for jobs over £" columns="1fr">
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Toggle on onChange={() => {}} />
-                <Input value="400" prefix="£" suffix="→ 12 mi" />
-              </div>
-            </Row>
             <Row label="Excluded postcodes" hint="Comma-separated" columns="1fr">
-              <Input value="SE1 4, E14 9" />
+              <Input value={form.excluded} onChange={(v) => setForm((f) => ({ ...f, excluded: v }))} placeholder="e.g. SE1, E14" />
             </Row>
           </div>
           <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", minHeight: 320, background: "#E8EAF0" }}>
@@ -716,15 +757,22 @@ export function ServiceAreaPage() {
                 }}
               />
             ))}
-            <div style={{ position: "absolute", bottom: 12, left: 12, padding: "8px 12px", background: T.white, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 11.5, color: T.slate, lineHeight: 1.5 }}>
-              <div>
-                <b>SW11 4PG</b> · 8 mi radius
+            {form.postcode && (
+              <div style={{ position: "absolute", bottom: 12, left: 12, padding: "8px 12px", background: T.white, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 11.5, color: T.slate, lineHeight: 1.5 }}>
+                <div>
+                  <b>{form.postcode}</b> · {form.radius} mi radius
+                </div>
               </div>
-              <div style={{ color: T.mute }}>≈ 290k people · 12 live jobs</div>
-            </div>
+            )}
           </div>
         </div>
       </PageCard>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={() => setForm(initial)} disabled={!dirty || saving}>Cancel</Button>
+        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save service area"}
+        </Button>
+      </div>
     </>
   );
 }

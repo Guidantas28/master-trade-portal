@@ -35,6 +35,7 @@ export interface Partner {
   primaryTrade: Trade;
   postcode: string;
   radiusMiles: number;
+  excludedPostcodes?: string[];
   tradingName: string;
   trialDaysLeft: number;
   trialEndsOn: string;

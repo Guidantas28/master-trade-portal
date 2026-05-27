@@ -27,10 +27,21 @@ export async function getPartnerSession(): Promise<PartnerSession | null> {
 
   if (error || !data) return null;
 
+  // Best-effort: pull the columns added by later migrations (196/204). If those migrations
+  // haven't been applied yet the select errors on the missing columns — we ignore it and fall
+  // back to the base row, so sign-in never breaks.
+  let extra: Partial<PartnerRow> = {};
+  const { data: ext } = await supabase
+    .from("partners")
+    .select("trial_ends_at, subscription_status, bio, years_experience, service_radius_miles, excluded_postcodes")
+    .eq("id", data.id)
+    .maybeSingle();
+  if (ext) extra = ext as Partial<PartnerRow>;
+
   return {
     userId: user.id,
     email: user.email ?? null,
     partnerId: data.id,
-    partner: mapPartner(data as PartnerRow),
+    partner: mapPartner({ ...(data as PartnerRow), ...extra }),
   };
 }

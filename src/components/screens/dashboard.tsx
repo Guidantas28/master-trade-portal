@@ -4,12 +4,14 @@
 // Wired to the partner's real jobs (useMyJobs). KPIs/activity/today are derived from those
 // rows; supply-side metrics (new leads, available jobs) return once those tables/screens land.
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
 import { Badge, Button, Card, Icon, IconButton, StatCard, StatusDot } from "@/components/ui/primitives";
 import { formatGBP } from "@/lib/format";
 import { usePartner } from "@/components/partner-context";
 import { useMyJobs } from "@/components/jobs-context";
+import { createClient } from "@/lib/supabase/client";
+import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
 import type { ActivityTone, MyJob } from "@/types";
 
 const LONDON = "Europe/London";
@@ -48,6 +50,44 @@ export function Dashboard({
 }) {
   const partner = usePartner();
   const { jobs, loading, error, refresh } = useMyJobs();
+
+  // Real extras the partner context doesn't carry: compliance docs + live trial days.
+  // Best-effort (tolerate missing mig-196 columns) so the dashboard never breaks.
+  const [docs, setDocs] = useState<PartnerDoc[] | null>(null);
+  const [trialDays, setTrialDays] = useState<number>(partner.trialDaysLeft);
+
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+    (async () => {
+      try {
+        const rows = await fetchPartnerDocuments(supabase, partner.id);
+        if (!cancelled) setDocs(rows);
+      } catch {
+        /* keep null */
+      }
+      try {
+        const { data } = await supabase.from("partners").select("trial_ends_at").eq("id", partner.id).maybeSingle();
+        const iso = (data as { trial_ends_at?: string | null } | null)?.trial_ends_at;
+        if (!cancelled && iso) {
+          const ms = new Date(iso).getTime() - Date.now();
+          setTrialDays(ms > 0 ? Math.ceil(ms / 86_400_000) : 0);
+        }
+      } catch {
+        /* mig 196 not applied — keep context value */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partner.id]);
+
+  const docSummary = useMemo(() => {
+    if (!docs) return null;
+    const verified = docs.filter((x) => x.status === "verified").length;
+    const expiringSoon = docs.find((x) => x.warning);
+    return { total: docs.length, verified, expiringSoon };
+  }, [docs]);
 
   const d = useMemo(() => {
     const today = londonDate(new Date());
@@ -154,11 +194,11 @@ export function Dashboard({
               {d.todayJobs.length} {d.todayJobs.length === 1 ? "job" : "jobs"} today
             </span>{" "}
             · {d.active.length} active
-            {partner.trialDaysLeft > 0 && (
+            {trialDays > 0 && (
               <>
                 {" "}·{" "}
                 <span className="fx-mono" style={{ color: T.amber }}>
-                  {partner.trialDaysLeft} day{partner.trialDaysLeft === 1 ? "" : "s"}
+                  {trialDays} day{trialDays === 1 ? "" : "s"}
                 </span>{" "}
                 left on trial
               </>
@@ -174,7 +214,7 @@ export function Dashboard({
       </div>
 
       {/* Trial nudge banner — only while on trial */}
-      {partner.trialDaysLeft > 0 && (
+      {trialDays > 0 && (
         <Card
           style={{
             padding: 14,
@@ -208,7 +248,7 @@ export function Dashboard({
             </div>
             <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>
               That&apos;s <b>0% commission</b> on your completed work.{" "}
-              {partner.trialDaysLeft} day{partner.trialDaysLeft === 1 ? "" : "s"} left on your trial.
+              {trialDays} day{trialDays === 1 ? "" : "s"} left on your trial.
             </div>
           </div>
           <Button variant="secondary" size="sm" onClick={() => onNav("settings:billing")}>
@@ -332,10 +372,24 @@ export function Dashboard({
         />
         <MiniCard
           icon="shield-check"
-          tone="green"
+          tone={docSummary && docSummary.total > 0 && docSummary.verified === docSummary.total ? "green" : "amber"}
           title="Compliance documents"
-          line1="Keep your insurance & certs up to date"
-          line2="Customers see verified trades first"
+          line1={
+            !docSummary
+              ? "Loading documents…"
+              : docSummary.total === 0
+                ? "No documents on file yet"
+                : `${docSummary.verified} of ${docSummary.total} verified`
+          }
+          line2={
+            !docSummary
+              ? ""
+              : docSummary.expiringSoon
+                ? `${docSummary.expiringSoon.name}: ${docSummary.expiringSoon.warning}`
+                : docSummary.total === 0
+                  ? "Upload your insurance & certs to get jobs"
+                  : "All documents up to date"
+          }
           cta="Manage docs"
           onCta={() => onNav("settings:docs")}
         />
