@@ -22,11 +22,22 @@ export async function POST(req: NextRequest) {
   let devCode: string | undefined;
   try {
     const admin = createServiceClient();
+
+    // Gate to registered partners: only emails that belong to an external_partner app user
+    // (public.users) get a code. Checked BEFORE generateLink so non-partners never even create
+    // an auth user. The linked partners row is then ensured at sign-in (getPartnerSession RPC).
+    const { data: appUser } = await admin
+      .from("users")
+      .select("id")
+      .ilike("email", email)
+      .eq("user_type", "external_partner")
+      .maybeSingle();
+    if (!appUser) return NextResponse.json({ ok: true }); // not a partner — silent (enumeration defence)
+
     const { data, error } = await admin.auth.admin.generateLink({ type: "magiclink", email });
     if (!error && data?.user) {
-      const { data: partner } = await admin.from("partners").select("id").eq("auth_user_id", data.user.id).maybeSingle();
       const otp = data.properties?.email_otp;
-      if (partner && otp) {
+      if (otp) {
         // Dev convenience: surface the code on localhost so you can sign in even when
         // email delivery isn't configured (e.g. invalid RESEND_API_KEY). Never in prod.
         if (process.env.NODE_ENV !== "production") devCode = otp;
