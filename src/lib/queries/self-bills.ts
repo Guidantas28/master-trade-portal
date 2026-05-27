@@ -16,9 +16,7 @@ export const SELF_BILL_SELECT = [
   "materials",
   "commission",
   "net_payout",
-  "original_net_payout",
   "status",
-  "partner_status_label",
   "pdf_generated_at",
   "created_at",
 ].join(",");
@@ -35,9 +33,7 @@ export interface SelfBillRow {
   materials: number | null;
   commission: number | null;
   net_payout: number | null;
-  original_net_payout: number | null;
   status: string | null;
-  partner_status_label: string | null;
   pdf_generated_at: string | null;
   created_at: string | null;
 }
@@ -103,8 +99,8 @@ export function mapSelfBill(row: SelfBillRow): SelfBill {
     period: periodLabel,
     jobs: row.jobs_count ?? 0,
     value: (row.job_value ?? 0) + (row.materials ?? 0),
-    net: row.net_payout ?? row.original_net_payout ?? 0,
-    statusLabel: row.partner_status_label || prettyStatus(status),
+    net: row.net_payout ?? 0,
+    statusLabel: prettyStatus(status),
     tone: TONE_BY_STATUS[status] ?? "neutral",
     hasPdf: !!row.pdf_generated_at,
     isAccumulating: status === "accumulating",

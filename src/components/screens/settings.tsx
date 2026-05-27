@@ -611,6 +611,7 @@ export function AvailabilityPage() {
       setSaving(false);
     }
   };
+  useRegisterOnboardingSave(save); // Continue saves availability automatically (before any early return — Rules of Hooks)
 
   if (loading || !av) {
     return (
@@ -622,8 +623,6 @@ export function AvailabilityPage() {
       </>
     );
   }
-
-  useRegisterOnboardingSave(save); // Continue saves availability automatically
 
   return (
     <>
@@ -704,14 +703,18 @@ export function ServiceAreaPage() {
         .split(",")
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean);
+      // partners.location is NOT NULL — use "" (never null) so a partner who hasn't set a postcode
+      // yet (fresh sign-up in onboarding) can still save the radius/exclusions.
       const { error } = await createClient()
         .from("partners")
-        .update({ location: form.postcode || null, service_radius_miles: form.radius, excluded_postcodes: excluded })
+        .update({ location: form.postcode.trim(), service_radius_miles: form.radius, excluded_postcodes: excluded })
         .eq("id", partner.id);
       if (error) throw error;
       toast({ text: "Service area saved", icon: "check" });
     } catch (e) {
-      toast({ text: e instanceof Error ? e.message : "Couldn't save service area", icon: "alert-triangle", tone: "coral" });
+      // Supabase errors aren't Error instances — read .message off the object so the real cause shows.
+      const msg = e instanceof Error ? e.message : (e as { message?: string } | null)?.message;
+      toast({ text: msg || "Couldn't save service area", icon: "alert-triangle", tone: "coral" });
     } finally {
       setSaving(false);
     }
@@ -1580,30 +1583,34 @@ export function PoliciesPage() {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           {contracts.map((c) => (
-            <Card key={c.versionId} style={{ padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-                <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
-                <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
-                  {c.version && <>v{c.version} · </>}
-                  {c.signed ? `Signed${c.signedAt ? ` ${c.signedAt}` : ""}` : "Not signed yet"}
+            <Card key={c.versionId} style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
                 </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
+                  <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
+                    {c.version && <>v{c.version} · </>}
+                    {c.signed ? `Signed${c.signedAt ? ` ${c.signedAt}` : ""}` : "Not signed yet"}
+                  </div>
+                </div>
+                {c.signed ? (
+                  <Badge tone="success" size="sm" icon="check">Signed</Badge>
+                ) : (
+                  <Badge tone="warning" size="sm">Pending</Badge>
+                )}
               </div>
-              {c.signed ? (
-                <Badge tone="success" size="sm" icon="check">Signed</Badge>
-              ) : (
-                <Badge tone="warning" size="sm">Pending</Badge>
-              )}
-              <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)}>
-                Read
-              </Button>
-              {!c.signed && (
-                <Button variant="primary" size="sm" icon="pen-line" onClick={() => { setSig(null); setSigning(c); }}>
-                  Sign
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)} style={{ flex: 1 }}>
+                  Read
                 </Button>
-              )}
+                {!c.signed && (
+                  <Button variant="primary" size="sm" icon="pen-line" onClick={() => { setSig(null); setSigning(c); }} style={{ flex: 1 }}>
+                    Sign
+                  </Button>
+                )}
+              </div>
             </Card>
           ))}
         </div>
