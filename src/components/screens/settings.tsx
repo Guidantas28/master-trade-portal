@@ -15,6 +15,7 @@ import { formatGBPdec } from "@/lib/format";
 import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
 import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
+import { fetchRateCard, saveRateCard, type ServicePrice, type RateCardPatch } from "@/lib/queries/rate-card";
 import { openBillingPortal, startCheckout } from "@/lib/billing";
 import type { Trade } from "@/types";
 
@@ -392,77 +393,143 @@ export function TradesPage() {
 }
 
 // ---------- RATE CARD ----------
+// Real per-service pricing: partner_service_prices joined to service_catalog. Each service is
+// either the catalog standard cost (use_standard) or the partner's own override.
 export function RatesPage() {
+  const partner = usePartner();
+  const toast = useToast();
+  const [rows, setRows] = useState<ServicePrice[]>([]);
+  const [initial, setInitial] = useState<ServicePrice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await fetchRateCard(createClient(), partner.id);
+        if (!cancelled) {
+          setRows(data);
+          setInitial(data);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load rate card");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partner.id]);
+
+  const dirty = JSON.stringify(rows) !== JSON.stringify(initial);
+  const update = (id: string, patch: Partial<ServicePrice>) =>
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const num = (v: string): number | null => (v.trim() === "" ? null : Number(v.replace(/[^0-9.]/g, "")) || 0);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const patches: RateCardPatch[] = rows.map((r) => ({
+        id: r.id,
+        use_standard: r.useStandard,
+        fixed_partner_cost: r.useStandard ? r.fixedPartnerCost : r.mode === "fixed" ? r.fixedPartnerCost : null,
+        hourly_partner_rate: r.useStandard ? r.hourlyPartnerRate : r.mode === "hourly" ? r.hourlyPartnerRate : null,
+        default_hours: r.mode === "hourly" ? r.defaultHours : null,
+      }));
+      await saveRateCard(createClient(), patches);
+      setInitial(rows);
+      toast({ text: "Rate card saved", icon: "check" });
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Couldn't save rate card", icon: "alert-triangle", tone: "coral" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
-      <SettingsHeader title="Rate card" subtitle="What you charge. Customers see totals only; Fixfy never undercuts your rates." />
-      <PageCard title="Job types you accept">
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <ToggleRow on onChange={() => {}} label="Hourly" hint="Default for ad-hoc work" />
-          <ToggleRow on onChange={() => {}} label="Day rate" hint="For multi-hour fixed days" />
-          <ToggleRow on onChange={() => {}} label="Fixed price" hint="Quoted per-job" />
+      <SettingsHeader title="Rate card" subtitle="Your cost per service. Use the Fixfy standard or set your own — customers see totals only." />
+      {loading ? (
+        <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="loader" size={14} color={T.mute} /> Loading rate card…
         </div>
-      </PageCard>
-
-      <PageCard title="Rates by trade">
-        <div style={{ overflow: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                {["Trade", "Hourly", "Half-day (4h)", "Day (8h)", "Min call-out"].map((h) => (
-                  <th
-                    key={h}
-                    style={{ textAlign: "left", padding: "8px 12px", fontSize: 10.5, letterSpacing: 0.4, color: T.mute, fontWeight: 500, borderBottom: `1px solid ${T.line}`, textTransform: "uppercase" }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["Plumbing", 65, 240, 440, 80],
-                ["General Maintenance", 45, 170, 320, 60],
-                ["Light Carpentry", 50, 190, 360, 65],
-              ].map((r) => (
-                <tr key={r[0] as string} style={{ borderBottom: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "12px", fontSize: 13, fontWeight: 500, color: T.ink }}>{r[0]}</td>
-                  <td style={{ padding: "8px" }}><Input value={String(r[1])} prefix="£" suffix="/hr" /></td>
-                  <td style={{ padding: "8px" }}><Input value={String(r[2])} prefix="£" /></td>
-                  <td style={{ padding: "8px" }}><Input value={String(r[3])} prefix="£" /></td>
-                  <td style={{ padding: "8px" }}><Input value={String(r[4])} prefix="£" /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </PageCard>
-
-      <PageCard title="Surcharges & fees">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Row label="Emergency surcharge" columns="1fr"><Input value="50" prefix="+%" /></Row>
-          <Row label="Out-of-hours window" columns="1fr">
-            <div style={{ display: "flex", gap: 8 }}>
-              <Input value="18:00" style={{ flex: 1 }} />
-              <Input value="07:00" style={{ flex: 1 }} />
-              <Input value="35" prefix="+%" style={{ width: 90 }} />
-            </div>
-          </Row>
-          <Row label="Weekend surcharge" columns="1fr"><Input value="25" prefix="+%" /></Row>
-          <Row label="Travel beyond 8 mi" columns="1fr"><Input value="0.75" prefix="£" suffix="/mi" /></Row>
-        </div>
-      </PageCard>
-
-      <Card style={{ padding: 16, background: T.paper, borderColor: T.line, display: "flex", alignItems: "center", gap: 14 }}>
-        <Icon name="calculator" size={20} color={T.coral} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>Preview</div>
-          <div style={{ fontSize: 12.5, color: T.slate, marginTop: 2 }}>
-            Standard <b>2h plumbing call-out</b> in your area: <span className="fx-mono" style={{ color: T.navy, fontWeight: 600 }}>£130 inc VAT</span> · <b>Emergency at 21:30</b>:{" "}
-            <span className="fx-mono" style={{ color: T.coral, fontWeight: 600 }}>£275</span>
+      ) : error ? (
+        <div style={{ padding: 8, color: T.coral, fontSize: 13 }}>{error}</div>
+      ) : rows.length === 0 ? (
+        <PageCard title="Services">
+          <div style={{ fontSize: 13, color: T.mute }}>
+            No services set up yet. Fixfy configures which services you&apos;re offered — they&apos;ll appear here to price.
           </div>
-        </div>
-      </Card>
+        </PageCard>
+      ) : (
+        <>
+          <PageCard title="Your services" subtitle="Toggle off &quot;standard&quot; to charge your own rate.">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {rows.map((r) => {
+                const standard = r.mode === "hourly" ? `${formatGBPdec(r.standardHourly)}/hr · ${r.standardHours}h` : formatGBPdec(r.standardFixed);
+                return (
+                  <div key={r.id} style={{ padding: 12, border: `1px solid ${T.line}`, borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{r.name}</div>
+                        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
+                          {r.mode === "hourly" ? "Hourly" : "Fixed"} · standard <span className="fx-mono">{standard}</span>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 12, color: T.slate }}>Use standard</span>
+                      <Toggle on={r.useStandard} onChange={(v) => update(r.id, { useStandard: v })} />
+                    </div>
+                    {!r.useStandard && (
+                      <div style={{ display: "flex", gap: 8, paddingLeft: 2 }}>
+                        {r.mode === "hourly" ? (
+                          <>
+                            <Input
+                              value={r.hourlyPartnerRate != null ? String(r.hourlyPartnerRate) : ""}
+                              onChange={(v) => update(r.id, { hourlyPartnerRate: num(v) })}
+                              prefix="£"
+                              suffix="/hr"
+                              placeholder={String(r.standardHourly)}
+                              style={{ width: 160 }}
+                            />
+                            <Input
+                              value={r.defaultHours != null ? String(r.defaultHours) : ""}
+                              onChange={(v) => update(r.id, { defaultHours: num(v) })}
+                              suffix="hrs"
+                              placeholder={String(r.standardHours)}
+                              style={{ width: 120 }}
+                            />
+                          </>
+                        ) : (
+                          <Input
+                            value={r.fixedPartnerCost != null ? String(r.fixedPartnerCost) : ""}
+                            onChange={(v) => update(r.id, { fixedPartnerCost: num(v) })}
+                            prefix="£"
+                            placeholder={String(r.standardFixed)}
+                            style={{ width: 180 }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </PageCard>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" onClick={() => setRows(initial)} disabled={!dirty || saving}>
+              Cancel
+            </Button>
+            <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+              {saving ? "Saving…" : "Save rate card"}
+            </Button>
+          </div>
+        </>
+      )}
     </>
   );
 }
