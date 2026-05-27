@@ -39,13 +39,25 @@ export async function POST(req: Request) {
     .eq("lead_id", leadId)
     .eq("partner_id", session.partnerId)
     .maybeSingle();
-  if (existing) return NextResponse.json({ ok: true });
 
-  const { error } = await svc.from("lead_partner_offers").insert({
-    lead_id: leadId,
-    partner_id: session.partnerId,
-    offered_by: session.userId, // the partner's own app user id (external_partner)
-  });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+  if (!existing) {
+    const { error } = await svc.from("lead_partner_offers").insert({
+      lead_id: leadId,
+      partner_id: session.partnerId,
+      offered_by: session.userId, // the partner's own app user id (external_partner)
+    });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Reveal the customer's contact details now that this partner has reached out.
+  const { data: lead } = await svc
+    .from("leads")
+    .select("email,phone,address,city")
+    .eq("id", leadId)
+    .maybeSingle();
+  const contact = lead
+    ? { email: lead.email ?? null, phone: lead.phone ?? null, address: [lead.address, lead.city].filter(Boolean).join(", ") || null }
+    : { email: null, phone: null, address: null };
+
+  return NextResponse.json({ ok: true, contact });
 }

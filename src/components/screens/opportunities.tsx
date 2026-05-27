@@ -35,6 +35,9 @@ interface PortalLead {
   posted: string | null;
   contactedCount: number;
   maxContacts: number;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
 }
 import type { AvailableJob, QuoteRequest, QuoteRequestStatus } from "@/types";
 import type { ToastInput } from "@/components/ui/toast";
@@ -86,10 +89,15 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't update lead");
+      const contact = json.contact ?? {};
       setLeads((prev) =>
-        prev.map((l) => (l.offerId === lead.offerId ? { ...l, status: "contacted", contactedCount: l.contactedCount + 1 } : l)),
+        prev.map((l) =>
+          l.offerId === lead.offerId
+            ? { ...l, status: "contacted", contactedCount: l.contactedCount + 1, email: contact.email, phone: contact.phone, address: contact.address }
+            : l,
+        ),
       );
-      onShowToast({ icon: "phone", text: "Marked as contacted. The office can see you reached out." });
+      onShowToast({ icon: "phone", text: "Customer details unlocked — reach out now." });
     } catch (e) {
       onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't update lead" });
     } finally {
@@ -226,6 +234,40 @@ function LeadCard({ lead, busy, onContact, onDecline }: { lead: PortalLead; busy
           <MetaItem icon="map-pin" label="Location" value={lead.postcode || "—"} />
           <MetaItem icon="banknote" label="Budget" value={lead.budget != null ? formatGBP(lead.budget) : "Not stated"} />
         </div>
+
+        {contacted && (lead.phone || lead.email || lead.address) && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 10,
+              background: T.paper,
+              border: `1px solid ${T.line}`,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 11, color: T.mute, display: "flex", alignItems: "center", gap: 5 }}>
+              <Icon name="user" size={11} /> Customer contact
+            </div>
+            {lead.phone && (
+              <a href={`tel:${lead.phone}`} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 500, color: T.ink, textDecoration: "none" }}>
+                <Icon name="phone" size={13} color={T.green} /> {lead.phone}
+              </a>
+            )}
+            {lead.email && (
+              <a href={`mailto:${lead.email}`} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: T.ink, textDecoration: "none", wordBreak: "break-all" }}>
+                <Icon name="mail" size={13} color={T.coral} /> {lead.email}
+              </a>
+            )}
+            {lead.address && (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: T.slate }}>
+                <Icon name="map-pin" size={13} color={T.mute} /> {lead.address}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Competition strip — closes once maxContacts trades reach out */}

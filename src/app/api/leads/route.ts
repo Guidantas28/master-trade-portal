@@ -34,6 +34,9 @@ interface LeadRow {
   status: string | null;
   postcode: string | null;
   city: string | null;
+  address: string | null;
+  email: string | null;
+  phone: string | null;
   published_at: string | null;
   created_at: string | null;
 }
@@ -46,7 +49,7 @@ export async function GET() {
 
   const { data: rows, error } = await svc
     .from("leads")
-    .select("id,reference,name,scope,urgency,status,postcode,city,published_at,created_at")
+    .select("id,reference,name,scope,urgency,status,postcode,city,address,email,phone,published_at,created_at")
     .is("deleted_at", null)
     .not("published_at", "is", null)
     .not("status", "in", CLOSED_STATUSES)
@@ -83,20 +86,27 @@ export async function GET() {
       const cc = contacted.get(l.id) ?? 0;
       return cc < MAX_CONTACTS || mineContacted.has(l.id); // closed once full, unless I'm in
     })
-    .map((l) => ({
-      offerId: l.id, // the lead id — used by the respond endpoint
-      reference: l.reference,
-      status: mineContacted.has(l.id) ? "contacted" : "offered",
-      title: l.name || l.scope || "Customer lead",
-      desc: l.scope || "",
-      postcode: l.postcode || "",
-      budget: null as number | null, // leads carry no budget
-      priority: l.urgency,
-      requestKind: null as string | null,
-      posted: l.published_at || l.created_at,
-      contactedCount: contacted.get(l.id) ?? 0,
-      maxContacts: MAX_CONTACTS,
-    }));
+    .map((l) => {
+      const iContacted = mineContacted.has(l.id);
+      return {
+        offerId: l.id, // the lead id — used by the respond endpoint
+        reference: l.reference,
+        status: iContacted ? "contacted" : "offered",
+        title: l.name || l.scope || "Customer lead",
+        desc: l.scope || "",
+        postcode: l.postcode || "",
+        budget: null as number | null, // leads carry no budget
+        priority: l.urgency,
+        requestKind: null as string | null,
+        posted: l.published_at || l.created_at,
+        contactedCount: contacted.get(l.id) ?? 0,
+        maxContacts: MAX_CONTACTS,
+        // Customer contact details are revealed only after this partner contacts the lead.
+        email: iContacted ? l.email : null,
+        phone: iContacted ? l.phone : null,
+        address: iContacted ? [l.address, l.city].filter(Boolean).join(", ") || null : null,
+      };
+    });
 
   return NextResponse.json({ leads });
 }
