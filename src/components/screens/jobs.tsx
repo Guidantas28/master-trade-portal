@@ -16,7 +16,7 @@ import {
   STATUS_LABELS,
   Tabs,
 } from "@/components/ui/primitives";
-import { MapBackground } from "@/components/ui/map-background";
+import { JobsMap as JobsMapView } from "@/components/ui/jobs-map";
 import { formatGBP } from "@/lib/format";
 import { usePartner } from "@/components/partner-context";
 import { useMyJobs } from "@/components/jobs-context";
@@ -363,7 +363,7 @@ function JobsMap({ onOpenJob, jobs }: { onOpenJob: OpenJob; jobs: MyJob[] }) {
       {/* List */}
       <Card style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ padding: "12px 14px", borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 500, color: T.navy }}>
-          {pins.length} pins
+          {jobs.length} {jobs.length === 1 ? "job" : "jobs"}
         </div>
         <div style={{ flex: 1, overflow: "auto" }}>
           {jobs.map((j, i) => (
@@ -419,110 +419,9 @@ function JobsMap({ onOpenJob, jobs }: { onOpenJob: OpenJob; jobs: MyJob[] }) {
         </div>
       </Card>
 
-      {/* Map tile */}
-      <Card style={{ overflow: "hidden", position: "relative", background: "#E8EAF0" }}>
-        <MapBackground />
-        {pins.map((p, i) => (
-          <button
-            key={p.id + i}
-            onClick={() => onOpenJob(jobs[i]?.id ?? p.id)}
-            style={{
-              position: "absolute",
-              left: `${p.x}%`,
-              top: `${p.y}%`,
-              transform: "translate(-50%, -100%)",
-              background: "transparent",
-              border: "none",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-            }}
-          >
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: "50% 50% 50% 0",
-                transform: "rotate(-45deg)",
-                background: dotColor(p.status),
-                border: `2px solid ${T.white}`,
-                boxShadow: "0 4px 8px rgba(2,0,64,0.2)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <span style={{ transform: "rotate(45deg)", color: T.white, fontSize: 11, fontWeight: 600 }}>{i + 1}</span>
-            </div>
-          </button>
-        ))}
-        {/* Home base */}
-        <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}>
-          <div
-            style={{
-              width: 14,
-              height: 14,
-              borderRadius: 9999,
-              background: T.navy,
-              border: `3px solid ${T.white}`,
-              boxShadow: "0 4px 8px rgba(2,0,64,0.2)",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: -22,
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: T.navy,
-              color: T.white,
-              padding: "2px 8px",
-              borderRadius: 9999,
-              fontSize: 10.5,
-              fontWeight: 500,
-              whiteSpace: "nowrap",
-              fontFamily: T.mono,
-            }}
-          >
-            {partner.postcode || "Your area"}
-          </div>
-        </div>
-        {/* Service radius ring */}
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-            width: 380,
-            height: 380,
-            borderRadius: 9999,
-            border: "1.5px dashed rgba(2,0,64,0.18)",
-            background: "rgba(2,0,64,0.03)",
-          }}
-        />
-
-        {/* Map controls */}
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            right: 12,
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-            background: T.white,
-            border: `1px solid ${T.line}`,
-            borderRadius: 8,
-            padding: 4,
-            boxShadow: "0 4px 8px rgba(2,0,64,0.08)",
-          }}
-        >
-          <IconButton icon="plus" size={28} tone="ghost" />
-          <div style={{ height: 1, background: T.line }} />
-          <IconButton icon="minus" size={28} tone="ghost" />
-        </div>
+      {/* Map tile — real Mapbox, plotting jobs by lat/lng */}
+      <Card style={{ overflow: "hidden", position: "relative", padding: 0 }}>
+        <JobsMapView jobs={jobs} onOpenJob={onOpenJob} minHeight={460} />
 
         {/* Legend */}
         <div

@@ -13,12 +13,14 @@
   "dependencies": {
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.98.0",
+    "@types/mapbox-gl": "^3.4.1",
     "lucide-react": "^0.577.0",
+    "mapbox-gl": "^3.24.0",
     "next": "16.1.6",
-    "stripe": "^20.4.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "resend": "^6.9.3"
+    "resend": "^6.9.3",
+    "stripe": "^20.4.1"
   },
   "devDependencies": {
     "@types/node": "^20",

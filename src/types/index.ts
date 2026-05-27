@@ -127,6 +127,8 @@ export interface MyJob {
   scheduledDate?: string; // raw ISO date (YYYY-MM-DD) for filtering/sorting
   scheduledStartAt?: string; // raw ISO timestamp for calendar placement
   scheduledEndAt?: string; // raw ISO timestamp for calendar placement
+  lat?: number; // jobs.latitude (geocoded)
+  lng?: number; // jobs.longitude (geocoded)
   completed?: string;
   completedDate?: string; // raw ISO date (YYYY-MM-DD) for KPI windows
   durationEst: string;

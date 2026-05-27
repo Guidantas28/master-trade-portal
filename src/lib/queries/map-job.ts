@@ -36,6 +36,8 @@ export const JOB_SELECT = [
   "quote_id",
   "in_ccz",
   "has_free_parking",
+  "latitude",
+  "longitude",
   "images",
   "partner_timer_started_at",
   "partner_timer_ended_at",
@@ -74,6 +76,8 @@ export interface JobRow {
   quote_id: string | null;
   in_ccz: boolean | null;
   has_free_parking: boolean | null;
+  latitude: number | null;
+  longitude: number | null;
   images: unknown[] | null;
   partner_timer_started_at: string | null;
   partner_timer_ended_at: string | null;
@@ -191,6 +195,8 @@ export function mapJob(row: JobRow): MyJob {
     scheduledDate: row.scheduled_date || undefined,
     scheduledStartAt: row.scheduled_start_at || undefined,
     scheduledEndAt: row.scheduled_end_at || undefined,
+    lat: typeof row.latitude === "number" ? row.latitude : undefined,
+    lng: typeof row.longitude === "number" ? row.longitude : undefined,
     completed: fmtFullDate(row.completed_date) || undefined,
     completedDate: row.completed_date || undefined,
     durationEst: durationEstimate(row),

@@ -28,6 +28,7 @@ Deploy to Railway or Vercel. Build `next build`, start `next start`, Node 20+.
 | `STRIPE_PRICE_FIXFY_PRO` | live £99/mo recurring price id |
 | `RESEND_API_KEY` | partner OTP emails |
 | `RESEND_FROM_EMAIL` | must be on a **verified** Resend domain |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | job-location map (My jobs → Map); same token as master-os |
 
 ## 4. Stripe
 - Switch to **live** mode.
