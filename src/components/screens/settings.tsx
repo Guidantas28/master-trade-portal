@@ -16,6 +16,16 @@ import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
 import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
 import { fetchRateCard, saveRateCard, type ServicePrice, type RateCardPatch } from "@/lib/queries/rate-card";
+import {
+  fetchPartnerSettings,
+  savePartnerSettings,
+  DAYS,
+  NOTIFICATION_EVENTS,
+  type Availability,
+  type DayKey,
+  type JobPreferences,
+  type NotificationPrefs,
+} from "@/lib/queries/partner-settings";
 import { openBillingPortal, startCheckout } from "@/lib/billing";
 import type { Trade } from "@/types";
 
@@ -536,54 +546,118 @@ export function RatesPage() {
 
 // ---------- AVAILABILITY ----------
 export function AvailabilityPage() {
-  const days = [
-    { name: "Mon", on: true, start: "08:00", end: "18:00" },
-    { name: "Tue", on: true, start: "08:00", end: "18:00" },
-    { name: "Wed", on: true, start: "08:00", end: "18:00" },
-    { name: "Thu", on: true, start: "08:00", end: "18:00" },
-    { name: "Fri", on: true, start: "08:00", end: "17:00" },
-    { name: "Sat", on: true, start: "09:00", end: "14:00" },
-    { name: "Sun", on: false, start: "—", end: "—" },
-  ];
+  const partner = usePartner();
+  const toast = useToast();
+  const [av, setAv] = useState<Availability | null>(null);
+  const [initial, setInitial] = useState<Availability | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const s = await fetchPartnerSettings(createClient(), partner.id);
+        if (!cancelled) {
+          setAv(s.availability);
+          setInitial(s.availability);
+        }
+      } catch {
+        /* defaults applied by fetch on success; on error leave null → loading guard */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partner.id]);
+
+  const dirty = !!av && JSON.stringify(av) !== JSON.stringify(initial);
+  const setDay = (key: DayKey, patch: Partial<{ on: boolean; start: string; end: string }>) =>
+    setAv((a) => (a ? { ...a, days: { ...a.days, [key]: { ...a.days[key], ...patch } } } : a));
+
+  const save = async () => {
+    if (!av) return;
+    setSaving(true);
+    try {
+      await savePartnerSettings(createClient(), partner.id, { availability: av });
+      setInitial(av);
+      toast({ text: "Availability saved", icon: "check" });
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Couldn't save availability", icon: "alert-triangle", tone: "coral" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading || !av) {
+    return (
+      <>
+        <SettingsHeader title="Availability" subtitle="When you're working. We only dispatch within these windows." />
+        <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="loader" size={14} color={T.mute} /> Loading availability…
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <SettingsHeader title="Availability" subtitle="When you're working. We only dispatch within these windows." />
       <PageCard title="Working hours">
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {days.map((d) => (
-            <div
-              key={d.name}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "60px 1fr 100px 100px",
-                gap: 12,
-                alignItems: "center",
-                padding: "8px 12px",
-                background: d.on ? T.white : T.paper,
-                borderRadius: 8,
-                border: `1px solid ${T.line}`,
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 500, color: d.on ? T.ink : T.mute }}>{d.name}</div>
-              <Toggle on={d.on} onChange={() => {}} label={d.on ? "Available" : "Day off"} />
-              <Input value={d.start} icon="clock" size="sm" />
-              <Input value={d.end} icon="clock" size="sm" />
-            </div>
-          ))}
+          {DAYS.map(({ key, label }) => {
+            const d = av.days[key];
+            return (
+              <div
+                key={key}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "60px 1fr 110px 110px",
+                  gap: 12,
+                  alignItems: "center",
+                  padding: "8px 12px",
+                  background: d.on ? T.white : T.paper,
+                  borderRadius: 8,
+                  border: `1px solid ${T.line}`,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 500, color: d.on ? T.ink : T.mute }}>{label}</div>
+                <Toggle on={d.on} onChange={(v) => setDay(key, { on: v })} label={d.on ? "Available" : "Day off"} />
+                <Input value={d.start} onChange={(v) => setDay(key, { start: v })} icon="clock" size="sm" />
+                <Input value={d.end} onChange={(v) => setDay(key, { end: v })} icon="clock" size="sm" />
+              </div>
+            );
+          })}
         </div>
       </PageCard>
 
       <PageCard title="Defaults & breaks">
-        <Row label="Buffer between jobs"><Input value="30" suffix="min" /></Row>
-        <Row label="Max jobs per day"><Input value="5" suffix="jobs" /></Row>
+        <Row label="Buffer between jobs">
+          <Input value={String(av.bufferMins)} onChange={(v) => setAv((a) => (a ? { ...a, bufferMins: Number(v.replace(/\D/g, "")) || 0 } : a))} suffix="min" />
+        </Row>
+        <Row label="Max jobs per day">
+          <Input value={String(av.maxJobsPerDay)} onChange={(v) => setAv((a) => (a ? { ...a, maxJobsPerDay: Number(v.replace(/\D/g, "")) || 0 } : a))} suffix="jobs" />
+        </Row>
         <Row label="Lunch window">
           <div style={{ display: "flex", gap: 8 }}>
-            <Input value="12:30" style={{ flex: 1 }} />
-            <Input value="13:00" style={{ flex: 1 }} />
+            <Input value={av.lunch.start} onChange={(v) => setAv((a) => (a ? { ...a, lunch: { ...a.lunch, start: v } } : a))} style={{ flex: 1 }} />
+            <Input value={av.lunch.end} onChange={(v) => setAv((a) => (a ? { ...a, lunch: { ...a.lunch, end: v } } : a))} style={{ flex: 1 }} />
           </div>
         </Row>
-        <Row label="24/7 emergency call-outs" hint="50% surcharge applied"><Toggle on onChange={() => {}} /></Row>
+        <Row label="24/7 emergency call-outs" hint="50% surcharge applied">
+          <Toggle on={av.emergency247} onChange={(v) => setAv((a) => (a ? { ...a, emergency247: v } : a))} />
+        </Row>
       </PageCard>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={() => setAv(initial)} disabled={!dirty || saving}>Cancel</Button>
+        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save availability"}
+        </Button>
+      </div>
     </>
   );
 }
@@ -656,20 +730,84 @@ export function ServiceAreaPage() {
 
 // ---------- PREFERENCES ----------
 function PreferencesPage() {
+  const partner = usePartner();
+  const toast = useToast();
+  const [prefs, setPrefs] = useState<JobPreferences | null>(null);
+  const [notif, setNotif] = useState<NotificationPrefs | null>(null);
+  const [initial, setInitial] = useState<{ prefs: JobPreferences; notif: NotificationPrefs } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const s = await fetchPartnerSettings(createClient(), partner.id);
+        if (!cancelled) {
+          setPrefs(s.jobPreferences);
+          setNotif(s.notificationPrefs);
+          setInitial({ prefs: s.jobPreferences, notif: s.notificationPrefs });
+        }
+      } catch {
+        /* ignore — guarded below */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partner.id]);
+
+  const dirty = !!prefs && !!notif && !!initial && JSON.stringify({ prefs, notif }) !== JSON.stringify(initial);
+  const setPref = (patch: Partial<JobPreferences>) => setPrefs((p) => (p ? { ...p, ...patch } : p));
+  const setChannel = (event: string, ch: "email" | "push" | "sms", v: boolean) =>
+    setNotif((n) => (n ? { ...n, [event]: { ...n[event], [ch]: v } } : n));
+
+  const save = async () => {
+    if (!prefs || !notif) return;
+    setSaving(true);
+    try {
+      await savePartnerSettings(createClient(), partner.id, { job_preferences: prefs, notification_prefs: notif });
+      setInitial({ prefs, notif });
+      toast({ text: "Preferences saved", icon: "check" });
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Couldn't save preferences", icon: "alert-triangle", tone: "coral" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading || !prefs || !notif) {
+    return (
+      <>
+        <SettingsHeader title="Job preferences" subtitle="The kinds of work you want — and don't." />
+        <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="loader" size={14} color={T.mute} /> Loading preferences…
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <SettingsHeader title="Job preferences" subtitle="The kinds of work you want — and don't." />
       <PageCard title="What you accept">
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <ToggleRow on onChange={() => {}} label="Receive leads" hint="Customer enquiries Fixfy hasn't quoted" />
-          <ToggleRow on onChange={() => {}} label="Receive emergency call-outs" hint="Out-of-hours, urgent. 50% surcharge applies" />
-          <ToggleRow on={false} onChange={() => {}} label="Receive multi-day jobs (3+ days)" />
-          <ToggleRow on={false} onChange={() => {}} label="Insurance / claim work only" />
+          <ToggleRow on={prefs.receiveLeads} onChange={(v) => setPref({ receiveLeads: v })} label="Receive leads" hint="Customer enquiries Fixfy hasn't quoted" />
+          <ToggleRow on={prefs.receiveEmergency} onChange={(v) => setPref({ receiveEmergency: v })} label="Receive emergency call-outs" hint="Out-of-hours, urgent. 50% surcharge applies" />
+          <ToggleRow on={prefs.receiveMultiDay} onChange={(v) => setPref({ receiveMultiDay: v })} label="Receive multi-day jobs (3+ days)" />
+          <ToggleRow on={prefs.insuranceOnly} onChange={(v) => setPref({ insuranceOnly: v })} label="Insurance / claim work only" />
         </div>
       </PageCard>
       <PageCard title="Limits">
-        <Row label="Minimum job value"><Input value="80" prefix="£" /></Row>
-        <Row label="Max simultaneous active jobs"><Input value="6" suffix="jobs" /></Row>
+        <Row label="Minimum job value">
+          <Input value={String(prefs.minJobValue)} onChange={(v) => setPref({ minJobValue: Number(v.replace(/\D/g, "")) || 0 })} prefix="£" />
+        </Row>
+        <Row label="Max simultaneous active jobs">
+          <Input value={String(prefs.maxActiveJobs)} onChange={(v) => setPref({ maxActiveJobs: Number(v.replace(/\D/g, "")) || 0 })} suffix="jobs" />
+        </Row>
       </PageCard>
       <PageCard title="Notifications">
         <div style={{ overflow: "auto" }}>
@@ -684,27 +822,38 @@ function PreferencesPage() {
               </tr>
             </thead>
             <tbody>
-              {([
-                ["New lead matched", true, true, false],
-                ["Emergency near you", true, true, true],
-                ["Job assigned to you", true, true, true],
-                ["Quote accepted", true, false, false],
-                ["Customer signed off", true, false, false],
-                ["Self-bill issued", true, false, false],
-                ["Document expiring", true, false, false],
-                ["New review", true, true, false],
-              ] as [string, boolean, boolean, boolean][]).map((row, i) => (
-                <tr key={i} style={{ borderBottom: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "12px", fontSize: 13, color: T.ink }}>{row[0]}</td>
-                  <td style={{ padding: "8px 12px" }}><Toggle on={row[1]} onChange={() => {}} /></td>
-                  <td style={{ padding: "8px 12px" }}><Toggle on={row[2]} onChange={() => {}} /></td>
-                  <td style={{ padding: "8px 12px" }}><Toggle on={row[3]} onChange={() => {}} /></td>
-                </tr>
-              ))}
+              {NOTIFICATION_EVENTS.map((e) => {
+                const ch = notif[e.key] ?? { email: false, push: false, sms: false };
+                return (
+                  <tr key={e.key} style={{ borderBottom: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "12px", fontSize: 13, color: T.ink }}>{e.label}</td>
+                    <td style={{ padding: "8px 12px" }}><Toggle on={ch.email} onChange={(v) => setChannel(e.key, "email", v)} /></td>
+                    <td style={{ padding: "8px 12px" }}><Toggle on={ch.push} onChange={(v) => setChannel(e.key, "push", v)} /></td>
+                    <td style={{ padding: "8px 12px" }}><Toggle on={ch.sms} onChange={(v) => setChannel(e.key, "sms", v)} /></td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </PageCard>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            if (initial) {
+              setPrefs(initial.prefs);
+              setNotif(initial.notif);
+            }
+          }}
+          disabled={!dirty || saving}
+        >
+          Cancel
+        </Button>
+        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save preferences"}
+        </Button>
+      </div>
     </>
   );
 }
