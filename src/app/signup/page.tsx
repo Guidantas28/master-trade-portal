@@ -1,8 +1,8 @@
 "use client";
 
-// Partner login — email OTP delivered via Resend (see /api/auth/request-otp).
-// The self-hosted Supabase has no GoTrue SMTP, so we generate the code server-side and
-// email it ourselves, then verify it (which sets the session cookie).
+// Self-registration for trades — collect the essentials, create the account + 30-day free trial,
+// then OTP sign-in (same code path as /login). On success we land in the app with ?welcome=1 so
+// the onboarding flow opens automatically. The rest of the profile is captured in onboarding.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -11,51 +11,53 @@ import { T } from "@/lib/tokens";
 import { Button, Icon, Input } from "@/components/ui/primitives";
 import { Wordmark } from "@/components/shell/sidebar";
 
-export default function LoginPage() {
+const TRADES = [
+  "Plumbing",
+  "General Maintenance",
+  "Light Carpentry",
+  "Electrical",
+  "Painting & Decorating",
+  "Tiling",
+  "Plastering",
+  "Flooring",
+];
+
+export default function SignupPage() {
   const router = useRouter();
-  const [step, setStep] = useState<"email" | "code">("email");
+  const [step, setStep] = useState<"details" | "code">("details");
+  const [fullName, setFullName] = useState("");
+  const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [trade, setTrade] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [devNote, setDevNote] = useState<string | null>(null);
 
-  const sendCode = async () => {
+  const detailsValid = fullName.trim() && company.trim() && email.includes("@") && trade;
+
+  const createAccount = async () => {
     setError(null);
     setDevNote(null);
     setBusy(true);
     try {
-      const res = await fetch("/api/auth/request-otp", {
+      const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: email.trim(), fullName: fullName.trim(), company: company.trim(), trade, phone: phone.trim() }),
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        devCode?: string;
-        emailError?: string;
-        genError?: string;
-        notPartner?: boolean;
-      };
-      if (!res.ok) throw new Error("Couldn't send the code. Try again.");
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; devCode?: string; emailError?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error || "Couldn't create your account.");
       setStep("code");
-      // Dev: prefill the code and surface why the email may not have arrived.
-      if (data.notPartner) {
-        setDevNote("This email isn't a registered partner (no partners row / external_partner). No code sent.");
-      } else if (data.devCode) {
+      if (data.devCode) {
         setCode(data.devCode);
-        setDevNote(
-          `Dev: code is ${data.devCode}` +
-            (data.emailError ? ` · email failed: ${data.emailError}` : "") +
-            (data.genError ? ` · ${data.genError}` : ""),
-        );
+        setDevNote(`Dev: code is ${data.devCode}${data.emailError ? ` · email failed: ${data.emailError}` : ""}`);
       } else if (data.emailError) {
         setDevNote(`Email send failed: ${data.emailError}`);
-      } else if (data.genError) {
-        setDevNote(`Auth: ${data.genError}`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send the code.");
+      setError(e instanceof Error ? e.message : "Couldn't create your account.");
     } finally {
       setBusy(false);
     }
@@ -72,7 +74,7 @@ export default function LoginPage() {
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) throw new Error(data.error || "That code didn't work.");
-      router.replace("/");
+      router.replace("/?welcome=1");
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "That code didn't work.");
@@ -86,28 +88,47 @@ export default function LoginPage() {
       <div
         onKeyDown={(e) => {
           if (e.key !== "Enter") return;
-          if (step === "email" && email.trim()) sendCode();
+          if (step === "details" && detailsValid) createAccount();
           if (step === "code" && code.trim().length === 6) verify();
         }}
-        style={{ width: 380, maxWidth: "100%", background: T.white, border: `1px solid ${T.line}`, borderRadius: 16, boxShadow: "0 24px 48px rgba(2,0,64,0.10)", overflow: "hidden" }}
+        style={{ width: 400, maxWidth: "100%", background: T.white, border: `1px solid ${T.line}`, borderRadius: 16, boxShadow: "0 24px 48px rgba(2,0,64,0.10)", overflow: "hidden" }}
       >
         <div style={{ padding: "24px 24px 0", display: "flex", alignItems: "center", gap: 8 }}>
           <Wordmark height={22} />
           <span style={{ fontSize: 10, fontWeight: 500, color: T.mute, padding: "2px 6px", background: T.paper2, borderRadius: 4, letterSpacing: 0.4 }}>TRADE</span>
         </div>
 
-        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 600, color: T.navy, letterSpacing: -0.3 }}>
-              {step === "email" ? "Sign in" : "Enter your code"}
+              {step === "details" ? "Start your 30-day free trial" : "Enter your code"}
             </div>
             <div style={{ fontSize: 13, color: T.mute, marginTop: 4, lineHeight: 1.5 }}>
-              {step === "email" ? "We'll email you a 6-digit sign-in code." : <>Sent to <b style={{ color: T.ink }}>{email}</b>. Check your inbox.</>}
+              {step === "details" ? (
+                "Create your Fixfy trade account — no card needed. We'll set you up in onboarding next."
+              ) : (
+                <>Sent to <b style={{ color: T.ink }}>{email}</b>. Check your inbox.</>
+              )}
             </div>
           </div>
 
-          {step === "email" ? (
-            <Input value={email} onChange={setEmail} placeholder="you@example.com" icon="mail" type="email" autoFocus size="lg" />
+          {step === "details" ? (
+            <>
+              <Input value={fullName} onChange={setFullName} placeholder="Your full name" icon="user" autoFocus size="lg" />
+              <Input value={company} onChange={setCompany} placeholder="Company / trading name" icon="briefcase" size="lg" />
+              <Input value={email} onChange={setEmail} placeholder="you@example.com" icon="mail" type="email" size="lg" />
+              <Input value={phone} onChange={setPhone} placeholder="Mobile (optional)" icon="phone" type="tel" size="lg" />
+              <select
+                value={trade}
+                onChange={(e) => setTrade(e.target.value)}
+                style={{ height: 42, padding: "0 12px", borderRadius: 8, border: `1px solid ${T.line}`, background: T.white, fontFamily: T.sans, fontSize: 14, color: trade ? T.ink : T.mute }}
+              >
+                <option value="">Your primary trade…</option>
+                {TRADES.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </>
           ) : (
             <Input value={code} onChange={setCode} placeholder="6-digit code" icon="lock" autoFocus size="lg" />
           )}
@@ -126,27 +147,27 @@ export default function LoginPage() {
             </div>
           )}
 
-          {step === "email" ? (
-            <Button variant="primary" size="lg" full icon="arrow-right" onClick={sendCode} disabled={busy || !email.trim()}>
-              {busy ? "Sending…" : "Send code"}
+          {step === "details" ? (
+            <Button variant="primary" size="lg" full icon="arrow-right" onClick={createAccount} disabled={busy || !detailsValid}>
+              {busy ? "Creating…" : "Create account"}
             </Button>
           ) : (
             <>
               <Button variant="primary" size="lg" full icon="check" onClick={verify} disabled={busy || code.trim().length < 6}>
-                {busy ? "Verifying…" : "Sign in"}
+                {busy ? "Verifying…" : "Start free trial"}
               </Button>
               <button
-                onClick={() => { setStep("email"); setCode(""); setError(null); }}
+                onClick={() => { setStep("details"); setCode(""); setError(null); }}
                 style={{ background: "transparent", border: "none", color: T.mute, fontSize: 12.5, fontFamily: T.sans, cursor: "pointer" }}
               >
-                ← Use a different email
+                ← Edit my details
               </button>
             </>
           )}
         </div>
 
         <div style={{ padding: "12px 24px", borderTop: `1px solid ${T.line}`, background: T.paper, fontSize: 12, color: T.mute, lineHeight: 1.5 }}>
-          New to Fixfy? <Link href="/signup" style={{ color: T.coral, fontWeight: 500 }}>Start a 30-day free trial</Link>
+          Already with Fixfy? <Link href="/login" style={{ color: T.coral, fontWeight: 500 }}>Sign in</Link>
         </div>
       </div>
     </div>

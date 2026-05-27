@@ -4,7 +4,7 @@
 // Ported from app.jsx. Navigation is internal state (faithful to the prototype);
 // real URL routes can be layered on in a later phase.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { T } from "@/lib/tokens";
 import { Button } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -33,6 +33,16 @@ export function TradePortalApp() {
   const [drawerJobId, setDrawerJobId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const toast = useToast();
+
+  // Fresh sign-ups land at /?welcome=1 — open onboarding straight away, then clean the URL so a
+  // refresh doesn't reopen it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("welcome") === "1") {
+      setShowOnboarding(true);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
 
   const [page, subpage] = route.split(":");
 

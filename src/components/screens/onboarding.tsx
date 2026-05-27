@@ -209,7 +209,7 @@ function WelcomeStep() {
       <OBTitle
         kicker="GET STARTED"
         title={`Welcome to Fixfy, ${partner.firstName}.`}
-        sub="A trade portal built for UK tradespeople. £99 a month, 3-day free trial, no commission on jobs — ever. Let's get you set up in about 8 minutes."
+        sub="A trade portal built for UK tradespeople. Your 30-day free trial has started — no card needed. £99/month after, no commission on jobs ever. Let's get you set up in about 8 minutes."
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {[
