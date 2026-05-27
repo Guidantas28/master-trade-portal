@@ -641,13 +641,34 @@ function ChecklistItemRow({ item, onToggle }: { item: ChecklistItemType; onToggl
 // PHOTOS TAB
 // ============================================================
 function PhotosTab({ job }: { job: MyJob }) {
+  const reference = job.referencePhotos ?? [];
   return (
     <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+      {reference.length > 0 && (
+        <Card style={{ padding: 0 }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 10 }}>
+            <Icon name="image" size={14} color={T.navy} />
+            <span style={{ fontSize: 13, fontWeight: 500, color: T.navy }}>Site reference photos</span>
+            <Badge tone="neutral" size="sm">{reference.length}</Badge>
+            <span style={{ flex: 1 }} />
+            <span style={{ fontSize: 11.5, color: T.mute }}>From the job brief</span>
+          </div>
+          <div style={{ padding: 14, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            {reference.map((url, i) => (
+              <a key={i} href={url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={url} alt={`Reference ${i + 1}`} style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "cover", borderRadius: 8, border: `1px solid ${T.line}` }} />
+              </a>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <Card style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, background: T.paper, borderColor: T.line }}>
         <Icon name="info" size={14} color={T.mute} />
         <span style={{ flex: 1, fontSize: 12.5, color: T.slate, lineHeight: 1.5 }}>
-          Minimum <b style={{ color: T.ink }}>2 before</b> and <b style={{ color: T.ink }}>2 after</b> photos required. Time and
-          location stamped automatically.
+          Add <b style={{ color: T.ink }}>2 before</b> and <b style={{ color: T.ink }}>2 after</b> photos. Time and location
+          stamped automatically. <span style={{ color: T.mute }}>(Upload storage coming soon.)</span>
         </span>
       </Card>
 
@@ -757,15 +778,9 @@ function PhotoPlaceholder() {
 // NOTES TAB
 // ============================================================
 function NotesTab({ job }: { job: MyJob }) {
-  const [workNotes, setWorkNotes] = useState(
-    job.notesAdded
-      ? "Annual service complete. Combustion clean within manufacturer ratios. Expansion vessel was below pre-charge — re-charged to 1.0 bar. Magnetic filter cleaned (light black sludge, recommend power-flush in 12 months)."
-      : "",
-  );
-  const [internalNotes, setInternalNotes] = useState(
-    job.notesAdded ? "Customer mentioned a slow drip from the upstairs basin — flagged a follow-up quote." : "",
-  );
-  const [followFlag, setFollowFlag] = useState(true);
+  const [workNotes, setWorkNotes] = useState(job.notes ?? "");
+  const [internalNotes, setInternalNotes] = useState(job.internalNotesText ?? "");
+  const [followFlag, setFollowFlag] = useState(false);
 
   const textareaStyle: CSSProperties = {
     width: "100%",

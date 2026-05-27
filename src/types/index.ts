@@ -138,6 +138,9 @@ export interface MyJob {
   beforePhotos: number;
   afterPhotos: number;
   notesAdded?: boolean;
+  notes?: string; // jobs.report_notes (customer-facing work notes)
+  internalNotesText?: string; // jobs.internal_notes
+  referencePhotos?: string[]; // jobs.images — site reference photos (read-only)
   signed?: boolean;
   elapsed?: string;
   accessNotes?: string;
