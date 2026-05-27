@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { createServiceClient } from "@/lib/supabase/service";
+import { partnerMissingRequiredDocs } from "@/lib/partner-docs-gate";
 
 export async function POST(req: Request) {
   const session = await getPartnerSession();
@@ -27,6 +28,15 @@ export async function POST(req: Request) {
   }
 
   const svc = createServiceClient();
+
+  // Gate: can't accept work until required documents are on file.
+  const missing = await partnerMissingRequiredDocs(svc, session.partnerId);
+  if (missing.length) {
+    return NextResponse.json(
+      { error: `Upload your required documents first: ${missing.join(", ")}.`, code: "docs_required" },
+      { status: 403 },
+    );
+  }
   const { data, error } = await svc
     .from("jobs")
     .update({ partner_id: session.partnerId, status: "scheduled", auto_assign_expires_at: null })

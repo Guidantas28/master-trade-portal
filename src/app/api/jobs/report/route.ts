@@ -87,6 +87,9 @@ export async function POST(req: Request) {
     .maybeSingle();
   if (!job) return NextResponse.json({ error: "Job not found." }, { status: 404 });
   if (job.partner_id !== session.partnerId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (job.status === "cancelled" || job.status === "completed") {
+    return NextResponse.json({ error: `This job is ${job.status} — you can't submit a report for it.` }, { status: 409 });
+  }
   if (job.start_report_submitted && job.final_report_submitted) {
     return NextResponse.json({ error: "A report has already been submitted for this job." }, { status: 409 });
   }

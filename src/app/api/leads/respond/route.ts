@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { createServiceClient } from "@/lib/supabase/service";
+import { partnerMissingRequiredDocs } from "@/lib/partner-docs-gate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,24 +32,22 @@ export async function POST(req: Request) {
 
   const svc = createServiceClient();
 
-  // Idempotent: only insert if this partner hasn't already contacted this lead. Avoids relying on
-  // a (lead_id, partner_id) unique constraint we don't control.
-  const { data: existing } = await svc
-    .from("lead_partner_offers")
-    .select("id")
-    .eq("lead_id", leadId)
-    .eq("partner_id", session.partnerId)
-    .maybeSingle();
-
-  if (!existing) {
-    // offered_by is FK → public.profiles(id) (staff). A partner self-contacting isn't a profile,
-    // so leave it null (it means "which staff offered the lead", N/A here).
-    const { error } = await svc.from("lead_partner_offers").insert({
-      lead_id: leadId,
-      partner_id: session.partnerId,
-    });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // Gate: can't contact a lead until required documents are on file.
+  const missing = await partnerMissingRequiredDocs(svc, session.partnerId);
+  if (missing.length) {
+    return NextResponse.json(
+      { error: `Upload your required documents first: ${missing.join(", ")}.`, code: "docs_required" },
+      { status: 403 },
+    );
   }
+
+  // Idempotent on the (lead_id, partner_id) unique constraint — upsert+ignoreDuplicates so two
+  // concurrent "Contact" clicks can't 500 on a race. offered_by is FK → public.profiles(id)
+  // (staff); a partner self-contacting isn't a profile, so leave it null.
+  const { error } = await svc
+    .from("lead_partner_offers")
+    .upsert({ lead_id: leadId, partner_id: session.partnerId }, { onConflict: "lead_id,partner_id", ignoreDuplicates: true });
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Reveal the customer's contact details now that this partner has reached out.
   const { data: lead } = await svc

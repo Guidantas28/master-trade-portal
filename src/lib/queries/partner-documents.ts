@@ -54,10 +54,14 @@ export const REQUIRED_PARTNER_DOCS = [
   { docType: "insurance", name: "Public Liability Insurance", description: "Active public liability policy" },
 ] as const;
 
-// Required doc_types still missing (no uploaded row, or only a rejected one). Empty = unlocked.
+// A required doc is satisfied only by an uploaded doc that's verified or awaiting review — a
+// rejected OR expired doc does NOT count (they must re-upload).
+const DOC_SATISFIES: ReadonlySet<DocStatus> = new Set<DocStatus>(["verified", "pending"]);
+
+// Required doc_types still missing (none uploaded, or only rejected/expired). Empty = unlocked.
 export function missingRequiredDocs(docs: Pick<PartnerDoc, "docType" | "status">[]): typeof REQUIRED_PARTNER_DOCS[number][] {
   return REQUIRED_PARTNER_DOCS.filter(
-    (req) => !docs.some((d) => d.docType === req.docType && d.status !== "rejected"),
+    (req) => !docs.some((d) => d.docType === req.docType && DOC_SATISFIES.has(d.status)),
   );
 }
 
