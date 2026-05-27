@@ -41,10 +41,11 @@ export async function POST(req: Request) {
     .maybeSingle();
 
   if (!existing) {
+    // offered_by is FK → public.profiles(id) (staff). A partner self-contacting isn't a profile,
+    // so leave it null (it means "which staff offered the lead", N/A here).
     const { error } = await svc.from("lead_partner_offers").insert({
       lead_id: leadId,
       partner_id: session.partnerId,
-      offered_by: session.userId, // the partner's own app user id (external_partner)
     });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
