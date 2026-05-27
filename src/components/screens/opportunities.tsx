@@ -23,7 +23,8 @@ import { createClient } from "@/lib/supabase/client";
 import { fetchAvailableQuotes, submitBid } from "@/lib/queries/quotes";
 import { fetchAvailableJobs } from "@/lib/queries/available-jobs";
 interface PortalLead {
-  offerId: string; // service_request id
+  offerId: string; // lead id (public.leads)
+  reference?: string | null;
   status: string;
   title: string;
   desc: string;
@@ -70,24 +71,25 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
   }, [load]);
 
   const act = async (lead: PortalLead, status: "contacted" | "declined") => {
+    // Decline isn't stored (no column on lead_partner_offers) — just hide it locally.
+    if (status === "declined") {
+      setLeads((prev) => prev.filter((l) => l.offerId !== lead.offerId));
+      onShowToast({ icon: "x", text: "Lead declined." });
+      return;
+    }
     setBusyId(lead.offerId);
     try {
       const res = await fetch("/api/leads/respond", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ serviceRequestId: lead.offerId, status }),
+        body: JSON.stringify({ leadId: lead.offerId, status }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't update lead");
-      if (status === "declined") {
-        setLeads((prev) => prev.filter((l) => l.offerId !== lead.offerId));
-        onShowToast({ icon: "x", text: "Lead declined." });
-      } else {
-        setLeads((prev) =>
-          prev.map((l) => (l.offerId === lead.offerId ? { ...l, status: "contacted", contactedCount: l.contactedCount + 1 } : l)),
-        );
-        onShowToast({ icon: "phone", text: "Marked as contacted. The office can see you reached out." });
-      }
+      setLeads((prev) =>
+        prev.map((l) => (l.offerId === lead.offerId ? { ...l, status: "contacted", contactedCount: l.contactedCount + 1 } : l)),
+      );
+      onShowToast({ icon: "phone", text: "Marked as contacted. The office can see you reached out." });
     } catch (e) {
       onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't update lead" });
     } finally {
@@ -186,6 +188,7 @@ function LeadCard({ lead, busy, onContact, onDecline }: { lead: PortalLead; busy
       <div style={{ padding: 16, paddingBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <Badge tone={timing.emergency ? "coral" : "soft"} size="sm">{timing.label}</Badge>
+          {lead.reference && <span style={{ fontSize: 11, color: T.mute, fontFamily: T.mono }}>{lead.reference}</span>}
           {lead.posted && <span style={{ fontSize: 11.5, color: T.mute }}>Sent {leadPosted(lead.posted)}</span>}
           {contacted && (
             <Badge tone="success" size="sm" icon="check">You contacted</Badge>

@@ -1,7 +1,9 @@
-// POST /api/leads/respond  { serviceRequestId, status: "contacted" | "declined" }
+// POST /api/leads/respond  { leadId, status: "contacted" }
 //
-// Records the partner's response to an OS lead by upserting a service_request_partner_offers row
-// (so the OS sees who contacted, and the MAX_CONTACTS cap can close the lead). Service role after
+// Records that the signed-in partner contacted a published lead by inserting a lead_partner_offers
+// row (lead_id, partner_id, offered_by). The table has no status column — the row's PRESENCE means
+// "this partner reached out", which feeds the MAX_CONTACTS first-come cap. "declined" isn't stored
+// (no column for it); the portal just hides a declined lead client-side. Service role after
 // resolving the partner from the session.
 
 import { NextResponse } from "next/server";
@@ -15,29 +17,35 @@ export async function POST(req: Request) {
   const session = await getPartnerSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  let body: { serviceRequestId?: string; status?: string };
+  let body: { leadId?: string; status?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
-  const { serviceRequestId, status } = body;
-  if (!serviceRequestId || (status !== "contacted" && status !== "declined")) {
-    return NextResponse.json({ error: "serviceRequestId and status (contacted|declined) required" }, { status: 400 });
-  }
+  const { leadId, status } = body;
+  if (!leadId) return NextResponse.json({ error: "leadId required" }, { status: 400 });
+
+  // Decline isn't persisted (no column on lead_partner_offers) — the portal hides it locally.
+  if (status === "declined") return NextResponse.json({ ok: true });
 
   const svc = createServiceClient();
-  const patch: Record<string, unknown> = {
-    service_request_id: serviceRequestId,
-    partner_id: session.partnerId,
-    status,
-    last_channel: "portal",
-    updated_at: new Date().toISOString(),
-  };
-  if (status === "contacted") patch.contacted_at = new Date().toISOString();
 
-  // onConflict (service_request_id, partner_id) — offered_at keeps its default on first insert.
-  const { error } = await svc.from("service_request_partner_offers").upsert(patch, { onConflict: "service_request_id,partner_id" });
+  // Idempotent: only insert if this partner hasn't already contacted this lead. Avoids relying on
+  // a (lead_id, partner_id) unique constraint we don't control.
+  const { data: existing } = await svc
+    .from("lead_partner_offers")
+    .select("id")
+    .eq("lead_id", leadId)
+    .eq("partner_id", session.partnerId)
+    .maybeSingle();
+  if (existing) return NextResponse.json({ ok: true });
+
+  const { error } = await svc.from("lead_partner_offers").insert({
+    lead_id: leadId,
+    partner_id: session.partnerId,
+    offered_by: session.userId, // the partner's own app user id (external_partner)
+  });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }
