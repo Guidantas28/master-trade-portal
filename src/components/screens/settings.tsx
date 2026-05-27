@@ -6,7 +6,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
-import { Avatar, Badge, Button, Card, Icon, Input, Toggle } from "@/components/ui/primitives";
+import { Avatar, Badge, Button, Card, Icon, Input, Modal, Toggle } from "@/components/ui/primitives";
 import { MapBackground } from "@/components/ui/map-background";
 import { useToast } from "@/components/ui/toast";
 import { usePartner } from "@/components/partner-context";
@@ -14,6 +14,7 @@ import { createClient } from "@/lib/supabase/client";
 import { formatGBPdec } from "@/lib/format";
 import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
+import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
 import { openBillingPortal, startCheckout } from "@/lib/billing";
 import type { Trade } from "@/types";
 
@@ -1033,32 +1034,89 @@ function DocUploadCard() {
 }
 
 // ---------- POLICIES ----------
+const CONTRACT_ICON: Record<string, string> = {
+  terms_of_use: "gavel",
+  self_bill_agreement: "receipt",
+};
+
 function PoliciesPage() {
-  const policies = [
-    { name: "Cancellation policy", accepted: "22 May 2026", icon: "x-circle" },
-    { name: "No-show policy", accepted: "22 May 2026", icon: "ban" },
-    { name: "Payment terms", accepted: "22 May 2026", icon: "banknote" },
-    { name: "Conduct standards", accepted: "22 May 2026", icon: "handshake" },
-    { name: "Insurance requirements", accepted: "22 May 2026", icon: "umbrella" },
-    { name: "Strikes & ratings", accepted: "22 May 2026", icon: "shield" },
-  ];
+  const partner = usePartner();
+  const [contracts, setContracts] = useState<PartnerContract[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reading, setReading] = useState<PartnerContract | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const rows = await fetchContracts(createClient(), partner.id);
+        if (!cancelled) setContracts(rows);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load policies");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partner.id]);
+
   return (
     <>
-      <SettingsHeader title="Policies" subtitle="The rules of the road. Fixfy may update these — you'll be re-prompted to accept." />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {policies.map((p) => (
-          <Card key={p.name} style={{ padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <Icon name={p.icon} size={18} color={T.navy} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{p.name}</div>
-              <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>v3.2 · accepted {p.accepted}</div>
-            </div>
-            <Button variant="ghost" size="sm" iconRight="arrow-up-right">Read</Button>
-          </Card>
-        ))}
-      </div>
+      <SettingsHeader title="Policies & contracts" subtitle="The agreements that govern working with Fixfy. Read them any time." />
+      {loading ? (
+        <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="loader" size={14} color={T.mute} /> Loading policies…
+        </div>
+      ) : error ? (
+        <div style={{ padding: 8, color: T.coral, fontSize: 13 }}>{error}</div>
+      ) : contracts.length === 0 ? (
+        <div style={{ padding: 8, color: T.mute, fontSize: 13 }}>No active contracts published.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {contracts.map((c) => (
+            <Card key={c.versionId} style={{ padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
+                <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
+                  {c.version && <>v{c.version} · </>}
+                  {c.signed ? `Signed${c.signedAt ? ` ${c.signedAt}` : ""}` : "Not signed yet"}
+                </div>
+              </div>
+              {c.signed ? (
+                <Badge tone="success" size="sm" icon="check">Signed</Badge>
+              ) : (
+                <Badge tone="warning" size="sm">Pending</Badge>
+              )}
+              <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)}>
+                Read
+              </Button>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {reading && (
+        <Modal title={reading.title} onClose={() => setReading(null)} width={680}>
+          <div style={{ padding: 20, maxHeight: "60vh", overflow: "auto", fontSize: 13, color: T.ink, lineHeight: 1.6 }}>
+            {reading.bodyHtml ? (
+              <div dangerouslySetInnerHTML={{ __html: reading.bodyHtml }} />
+            ) : (
+              <div style={{ color: T.mute }}>No contract text available.</div>
+            )}
+          </div>
+          <div style={{ padding: 16, borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "flex-end" }}>
+            <Button variant="secondary" onClick={() => setReading(null)}>Close</Button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
