@@ -17,9 +17,11 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [devNote, setDevNote] = useState<string | null>(null);
 
   const sendCode = async () => {
     setError(null);
+    setDevNote(null);
     setBusy(true);
     try {
       const res = await fetch("/api/auth/request-otp", {
@@ -27,8 +29,27 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim() }),
       });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        devCode?: string;
+        emailError?: string;
+        genError?: string;
+      };
       if (!res.ok) throw new Error("Couldn't send the code. Try again.");
       setStep("code");
+      // Dev: prefill the code and surface why the email may not have arrived.
+      if (data.devCode) {
+        setCode(data.devCode);
+        setDevNote(
+          `Dev: code is ${data.devCode}` +
+            (data.emailError ? ` · email failed: ${data.emailError}` : "") +
+            (data.genError ? ` · ${data.genError}` : ""),
+        );
+      } else if (data.emailError) {
+        setDevNote(`Email send failed: ${data.emailError}`);
+      } else if (data.genError) {
+        setDevNote(`Auth: ${data.genError}`);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't send the code.");
     } finally {
@@ -91,6 +112,13 @@ export default function LoginPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.red, background: T.red50, borderRadius: 8, padding: "8px 10px" }}>
               <Icon name="alert-triangle" size={14} />
               <span>{error}</span>
+            </div>
+          )}
+
+          {devNote && (
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: T.amber, background: T.amber50, borderRadius: 8, padding: "8px 10px", lineHeight: 1.4 }}>
+              <Icon name="info" size={14} />
+              <span>{devNote}</span>
             </div>
           )}
 

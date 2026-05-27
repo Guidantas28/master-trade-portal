@@ -20,6 +20,8 @@ export async function POST(req: NextRequest) {
   if (!email || !email.includes("@")) return NextResponse.json({ ok: true });
 
   let devCode: string | undefined;
+  let emailError: string | undefined;
+  let genError: string | undefined;
   try {
     const admin = createServiceClient();
 
@@ -35,6 +37,7 @@ export async function POST(req: NextRequest) {
     if (!isPartner) return NextResponse.json({ ok: true }); // not a partner — silent (enumeration defence)
 
     const { data, error } = await admin.auth.admin.generateLink({ type: "magiclink", email });
+    if (error) genError = error.message;
     if (!error && data?.user) {
       const otp = data.properties?.email_otp;
       if (otp) {
@@ -44,13 +47,25 @@ export async function POST(req: NextRequest) {
         try {
           await sendOtpEmail(email, otp);
         } catch (e) {
-          console.error("[auth/request-otp] email send failed (set a valid RESEND_API_KEY):", e);
+          emailError = e instanceof Error ? e.message : String(e);
+          console.error("[auth/request-otp] email send failed (check RESEND_API_KEY / verified RESEND_FROM_EMAIL domain):", e);
         }
+      } else {
+        genError = genError ?? "No OTP returned by Supabase generateLink.";
       }
     }
   } catch (err) {
+    genError = err instanceof Error ? err.message : String(err);
     console.error("[auth/request-otp]", err);
   }
 
-  return NextResponse.json(devCode ? { ok: true, devCode } : { ok: true });
+  // In dev, return the code + any send/generate error so you can sign in and diagnose without
+  // depending on email delivery. In production only { ok: true } (enumeration defence).
+  const dev = process.env.NODE_ENV !== "production";
+  return NextResponse.json({
+    ok: true,
+    ...(dev && devCode ? { devCode } : {}),
+    ...(dev && emailError ? { emailError } : {}),
+    ...(dev && genError ? { genError } : {}),
+  });
 }
