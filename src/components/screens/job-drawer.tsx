@@ -50,10 +50,31 @@ export function JobDrawer({
   onClose: () => void;
   onShowToast: ShowToast;
 }) {
-  const { jobs } = useMyJobs();
+  const { jobs, refresh } = useMyJobs();
   const job = jobs.find((j) => j.id === jobId); // real jobs only; unknown id → drawer closed
   const [tab, setTab] = useState("overview");
   const [closing, setClosing] = useState(false);
+  const [starting, setStarting] = useState(false);
+
+  const startJob = async () => {
+    if (!job) return;
+    setStarting(true);
+    try {
+      const res = await fetch("/api/jobs/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.uuid }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Couldn't start the job");
+      refresh(); // re-pull jobs so the drawer + board reflect in_progress (and the OS already has it)
+      onShowToast({ icon: "play", text: "Job started — you're on the clock. The office can see it." });
+    } catch (e) {
+      onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't start the job" });
+    } finally {
+      setStarting(false);
+    }
+  };
 
   const handleClose = () => {
     setClosing(true);
@@ -242,10 +263,14 @@ export function JobDrawer({
               />
             </div>
           </div>
-          {job.status === "scheduled" && <Button variant="primary" icon="play" size="lg">Start job</Button>}
+          {job.status === "scheduled" && (
+            <Button variant="primary" icon="play" size="lg" onClick={startJob} disabled={starting}>
+              {starting ? "Starting…" : "Start job"}
+            </Button>
+          )}
           {job.status === "in_progress" && (
-            <Button variant="dark" icon="check" size="lg" disabled={progress < 1}>
-              {progress < 1 ? `${job.checklistTotal - job.checklistDone} steps to go` : "Mark complete"}
+            <Button variant="primary" icon="send" size="lg" onClick={() => setTab("signoff")}>
+              Continue to report
             </Button>
           )}
           {job.status === "final_check" && (
