@@ -15,6 +15,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { QuoteRequest, QuoteRequestStatus } from "@/types";
 import { tradeMatchesService } from "@/lib/trade-match";
+import {
+  type PartnerBidProposalPayload,
+  serializeBidProposalNotes,
+} from "@/lib/quote-bid-payload";
 
 interface InvitationRow {
   quote_id: string;
@@ -36,6 +40,7 @@ interface BidRow {
   partner_id: string;
   bid_amount: number | null;
   status: string | null;
+  notes: string | null;
 }
 
 // Bidding-status quotes that haven't been awarded/closed yet — these are the candidates
@@ -124,7 +129,7 @@ export async function fetchAvailableQuotes(supabase: SupabaseClient, partnerId: 
 
   const { data: bids, error: bErr } = await supabase
     .from("quote_bids")
-    .select("quote_id,partner_id,bid_amount,status")
+    .select("quote_id,partner_id,bid_amount,status,notes")
     .in("quote_id", quoteIds);
   if (bErr) throw bErr;
   const bidRows = bids as BidRow[];
@@ -147,6 +152,7 @@ export async function fetchAvailableQuotes(supabase: SupabaseClient, partnerId: 
       deadline: fmtDeadline(q.expires_at),
       status,
       yourBid: myBid?.bid_amount ?? undefined,
+      myBidNotes: myBid?.notes ?? undefined,
       leadingBid,
       awardedAmount: status === "won" ? myBid?.bid_amount ?? q.total_value ?? undefined : undefined,
     } satisfies QuoteRequest;
@@ -155,15 +161,56 @@ export async function fetchAvailableQuotes(supabase: SupabaseClient, partnerId: 
 
 export async function submitBid(
   supabase: SupabaseClient,
-  args: { quoteId: string; partnerId: string; partnerName: string; amount: number; notes?: string },
+  args: {
+    quoteId: string;
+    partnerId: string;
+    partnerName: string;
+    amount: number;
+    payload: PartnerBidProposalPayload;
+  },
 ): Promise<void> {
+  const notes = serializeBidProposalNotes(args.payload);
+  // Mirror the OS-side bid insert exactly (src/app/api/quotes/submit-bid/route.ts):
+  // - explicit job_type 'fixed' so the column never lands NULL on schemas where
+  //   the default was added after the row was created.
+  // - created_at / updated_at stamped explicitly so the row carries timestamps
+  //   the approval RPC + UI consumers can rely on.
+  // - upsert by (quote_id, partner_id) so a partner re-submitting just refreshes
+  //   their bid instead of writing a sibling row that the approve flow then has
+  //   to reject.
+  const now = new Date().toISOString();
+  const { data: existing } = await supabase
+    .from("quote_bids")
+    .select("id")
+    .eq("quote_id", args.quoteId)
+    .eq("partner_id", args.partnerId)
+    .maybeSingle();
+
+  if (existing && (existing as { id: string }).id) {
+    const { error } = await supabase
+      .from("quote_bids")
+      .update({
+        bid_amount: args.amount,
+        job_type:   "fixed",
+        notes,
+        status:     "submitted",
+        updated_at: now,
+      })
+      .eq("id", (existing as { id: string }).id);
+    if (error) throw error;
+    return;
+  }
+
   const { error } = await supabase.from("quote_bids").insert({
-    quote_id: args.quoteId,
-    partner_id: args.partnerId,
+    quote_id:     args.quoteId,
+    partner_id:   args.partnerId,
     partner_name: args.partnerName,
-    bid_amount: args.amount,
-    notes: args.notes || null,
-    status: "submitted",
+    bid_amount:   args.amount,
+    job_type:     "fixed",
+    notes,
+    status:       "submitted",
+    created_at:   now,
+    updated_at:   now,
   });
   if (error) throw error;
 }
