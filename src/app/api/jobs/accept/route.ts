@@ -1,15 +1,14 @@
 // POST /api/jobs/accept  { jobId }
 //
 // First-to-accept-wins claim of an auto-assign job offer. The partner is resolved from the
-// signed-in session (never trusted from the request body), then a service-role client performs
-// an ATOMIC conditional update: it only succeeds while the row is still status='auto_assigning'
-// with partner_id IS NULL and this partner is in auto_assign_invited_partner_ids. Postgres row
-// locking serialises concurrent accepts, so a second partner matches 0 rows → { accepted:false }.
+// signed-in session (never trusted from the request body). The claim + Zendesk Job booked
+// email + invite finalisation run in Master OS — the same path as the email "Accept job" CTA.
 
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 import { partnerMissingRequiredDocs } from "@/lib/partner-docs-gate";
+import { callMasterOsPartnerPortalAccept } from "@/lib/master-os-internal";
 
 export async function POST(req: Request) {
   const session = await getPartnerSession();
@@ -29,7 +28,6 @@ export async function POST(req: Request) {
 
   const svc = createServiceClient();
 
-  // Gate: can't accept work until required documents are on file.
   const missing = await partnerMissingRequiredDocs(svc, session.partnerId);
   if (missing.length) {
     return NextResponse.json(
@@ -37,21 +35,32 @@ export async function POST(req: Request) {
       { status: 403 },
     );
   }
-  const { data, error } = await svc
-    .from("jobs")
-    .update({ partner_id: session.partnerId, status: "scheduled", auto_assign_expires_at: null })
-    .eq("id", jobId)
-    .eq("status", "auto_assigning")
-    .is("partner_id", null)
-    .contains("auto_assign_invited_partner_ids", [session.partnerId])
-    .select("id, reference");
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  const result = await callMasterOsPartnerPortalAccept(jobId, session.partnerId);
+
+  if (!result.ok) {
+    if (result.status === 409 && result.error === "job_taken") {
+      return NextResponse.json({ accepted: false, error: result.error, message: result.message });
+    }
+    if (result.status === 410) {
+      return NextResponse.json({ accepted: false, error: result.error, message: result.message });
+    }
+    if (result.code === "docs_required" || result.status === 403) {
+      return NextResponse.json(
+        { error: result.message ?? result.error, code: "docs_required" },
+        { status: 403 },
+      );
+    }
+    return NextResponse.json(
+      { error: result.message ?? result.error ?? "Couldn't accept job" },
+      { status: result.status >= 400 ? result.status : 500 },
+    );
   }
-  if (!data || data.length === 0) {
-    // Lost the race, offer expired, or not invited.
-    return NextResponse.json({ accepted: false });
-  }
-  return NextResponse.json({ accepted: true, jobId: data[0].id, reference: data[0].reference });
+
+  return NextResponse.json({
+    accepted: true,
+    jobId,
+    reference: result.jobReference,
+    alreadyConfirmed: result.alreadyConfirmed ?? false,
+  });
 }
