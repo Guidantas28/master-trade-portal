@@ -169,6 +169,17 @@ export async function submitBid(
   },
 ): Promise<void> {
   const notes = serializeBidProposalNotes(args.payload);
+  // Guard: never let a partner bid on a quote that's no longer open. The quote
+  // may have moved to approved / sent / converted while the modal was open.
+  const { data: quoteRow } = await supabase
+    .from("quotes")
+    .select("status")
+    .eq("id", args.quoteId)
+    .maybeSingle();
+  const qStatus = (quoteRow as { status?: string } | null)?.status;
+  if (qStatus && qStatus !== "bidding" && qStatus !== "in_survey") {
+    throw new Error("This quote is no longer open for bids.");
+  }
   // Mirror the OS-side bid insert exactly (src/app/api/quotes/submit-bid/route.ts):
   // - explicit job_type 'fixed' so the column never lands NULL on schemas where
   //   the default was added after the row was created.

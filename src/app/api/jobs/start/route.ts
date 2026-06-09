@@ -7,10 +7,16 @@
 
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
-import { createServiceClient } from "@/lib/supabase/service";
+import { tryCreateServiceClient } from "@/lib/supabase/service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const misconfig = () =>
+  NextResponse.json(
+    { error: "Server configuration error", code: "server_misconfigured", message: "SERVICE_ROLE_KEY is not set on the trade portal." },
+    { status: 503 },
+  );
 
 export async function POST(req: Request) {
   const session = await getPartnerSession();
@@ -24,7 +30,8 @@ export async function POST(req: Request) {
   }
   if (!jobId || typeof jobId !== "string") return NextResponse.json({ error: "jobId required" }, { status: 400 });
 
-  const svc = createServiceClient();
+  const svc = tryCreateServiceClient();
+  if (!svc) return misconfig();
   const { data: job } = await svc
     .from("jobs")
     .select("id, partner_id, status")

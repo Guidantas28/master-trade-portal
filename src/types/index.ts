@@ -4,15 +4,9 @@
 // UI built against mock data can be wired to the real database with minimal change.
 // DB-mapping notes are inline; see src/lib/supabase/README for the wiring plan.
 
-export type Trade =
-  | "Plumbing"
-  | "General Maintenance"
-  | "Light Carpentry"
-  | "Electrical"
-  | "Painting & Decorating"
-  | "Tiling"
-  | "Plastering"
-  | "Flooring";
+// Trades are now driven by the OS service_catalog (the partner picks the actual
+// services we offer), so this is an open string rather than a fixed union.
+export type Trade = string;
 
 // master-os: jobs.status (aligned with the OS lifecycle)
 export type JobStatus = "scheduled" | "in_progress" | "final_check" | "completed" | "cancelled";
