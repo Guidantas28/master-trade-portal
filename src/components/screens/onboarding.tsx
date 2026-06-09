@@ -3,7 +3,7 @@
 // Onboarding — 11-step modal flow. Ported from onboarding.jsx.
 // Steps reuse several Settings pages (Trades, Area, Availability, Rates, Docs).
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
 import { OnboardingSaveProvider, useRegisterOnboardingSave, type OnboardingSaveFn } from "@/components/onboarding-save";
 import { Avatar, Badge, Button, Card, Field, Icon, Input, Modal } from "@/components/ui/primitives";
@@ -12,7 +12,6 @@ import { usePartner } from "@/components/partner-context";
 import { useToast } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase/client";
 import {
-  AvailabilityPage,
   BillingPage,
   DocsPage,
   PoliciesPage,
@@ -27,7 +26,6 @@ const ONBOARDING_STEPS = [
   { id: "details", label: "Your details", icon: "user" },
   { id: "trades", label: "Your trades", icon: "wrench" },
   { id: "area", label: "Service area", icon: "map-pin" },
-  { id: "availability", label: "Availability", icon: "calendar-clock" },
   { id: "rates", label: "Rate card", icon: "banknote" },
   { id: "docs", label: "Documents", icon: "shield-check" },
   { id: "selfbill", label: "Self-bill", icon: "receipt" },
@@ -145,18 +143,25 @@ export function Onboarding({
 
         {/* Step content */}
         <div style={{ display: "flex", flexDirection: "column" }}>
+          {/* Top progress — always visible so the partner can see they're moving fast */}
+          <div style={{ padding: "16px 32px 0" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: T.slate, fontFamily: T.mono, letterSpacing: 0.5 }}>
+                STEP {step + 1} OF {total} · ABOUT 4 MINUTES
+              </span>
+              <span style={{ fontSize: 11, color: T.mute, fontFamily: T.mono }}>{Math.round(((step + 1) / total) * 100)}%</span>
+            </div>
+            <div style={{ height: 5, borderRadius: 9999, background: T.line, overflow: "hidden" }}>
+              <div style={{ width: `${((step + 1) / total) * 100}%`, height: "100%", background: T.coral, borderRadius: 9999, transition: `width 240ms ${T.ease}` }} />
+            </div>
+          </div>
           <div style={{ flex: 1, padding: 32, overflow: "auto" }}>
             <OnboardingSaveProvider value={saveCtx}>
               <OnboardingStep step={step} setStep={setStep} onDocsChanged={onDocsChanged} />
             </OnboardingSaveProvider>
           </div>
           <div style={{ padding: 16, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 140, height: 4, borderRadius: 9999, background: T.line, overflow: "hidden" }}>
-                <div style={{ width: `${((step + 1) / total) * 100}%`, height: "100%", background: T.coral, transition: `width 200ms ${T.ease}` }} />
-              </div>
-              <span style={{ fontSize: 11.5, color: T.mute, fontFamily: T.mono }}>{Math.round(((step + 1) / total) * 100)}%</span>
-            </div>
+            <div style={{ flex: 1 }} />
             {step > 0 && (
               <Button variant="secondary" icon="arrow-left" onClick={prev}>
                 Back
@@ -198,41 +203,35 @@ function OnboardingStep({ step, setStep, onDocsChanged }: { step: number; setSte
       );
     case 4:
       return (
-        <StepWrap kicker="STEP 5" title="When you're working" sub="We'll only dispatch jobs inside these windows.">
-          <AvailabilityPage />
+        <StepWrap kicker="STEP 5" title="Your rate card" sub="What you charge, all in. You can take our standard price or set your own — we never go above our customer price.">
+          <RatesPage />
         </StepWrap>
       );
     case 5:
       return (
-        <StepWrap kicker="STEP 6" title="Your rate card" sub="What you charge, all in. We never undercut your pricing.">
-          <RatesPage />
+        <StepWrap kicker="STEP 6" title="Documents" sub="Photo ID, proof of address, right to work and public liability — all required before you can pick up work. Some trades need a certificate too.">
+          <DocsPage onChanged={onDocsChanged} />
         </StepWrap>
       );
     case 6:
       return (
-        <StepWrap kicker="STEP 7" title="Documents" sub="Photo ID, proof of address, right to work and public liability — all required before you can pick up work. Trade certificates required by trade.">
-          <DocsPage onChanged={onDocsChanged} />
+        <StepWrap kicker="STEP 7" title="Self-bill & payouts" sub="We invoice on your behalf for completed jobs and pay you via Stripe. Connect your payout account.">
+          <SelfBillPage />
         </StepWrap>
       );
     case 7:
       return (
-        <StepWrap kicker="STEP 8" title="Self-bill & payouts" sub="We invoice on your behalf for completed jobs and pay you via Stripe. Connect your payout account.">
-          <SelfBillPage />
+        <StepWrap kicker="STEP 8" title="Policies" sub="Read and sign the agreements. You can re-read any of them any time in Settings.">
+          <PoliciesPage />
         </StepWrap>
       );
     case 8:
       return (
-        <StepWrap kicker="STEP 9" title="Policies" sub="Read and sign the agreements. You can re-read any time in Settings.">
-          <PoliciesPage />
-        </StepWrap>
-      );
-    case 9:
-      return (
-        <StepWrap kicker="STEP 10" title="Your plan" sub="You're on a 30-day free trial — no charge today. Add a card whenever you're ready to continue after the trial.">
+        <StepWrap kicker="STEP 9" title="Your plan" sub="You're on a 30-day free trial — no charge today. Add a card whenever you're ready to continue after the trial.">
           <BillingPage />
         </StepWrap>
       );
-    case 10:
+    case 9:
       return <DoneStep />;
     default:
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -267,13 +266,13 @@ function WelcomeStep() {
       <OBTitle
         kicker="GET STARTED"
         title={`Welcome to Fixfy, ${partner.firstName}.`}
-        sub="A trade portal built for UK tradespeople. Your 30-day free trial has started — no card needed. £99/month after, no commission on jobs ever. Let's get you set up in about 8 minutes."
+        sub="The trade portal built for UK tradespeople. Your 30-day free trial has started — no card needed, just a flat £99/month after, and never any commission on your jobs. Let's get you set up in about 4 minutes."
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {[
-          { icon: "percent", title: "0% commission", body: "You keep 100% of every job. We charge a flat £99/month." },
-          { icon: "banknote", title: "Net-7 self-bill", body: "Customer signs off → cash in your bank within a week." },
-          { icon: "shield-check", title: "You stay in control", body: "Your rates, your area, your hours. We just route the work." },
+          { icon: "shield-check", title: "A contract built around you", body: "The strongest partner agreement in the trade — clear terms, no lock-in, and written to work in your favour." },
+          { icon: "banknote", title: "Paid in full, no deductions", body: "0% commission and no platform fees skimmed off your work. What we agree is exactly what lands in your bank." },
+          { icon: "sliders-horizontal", title: "You stay in control", body: "Your rates, your area, your hours. We just route the work to you." },
         ].map((b) => (
           <Card key={b.title} style={{ padding: 16 }}>
             <div style={{ width: 32, height: 32, borderRadius: 8, background: T.coralTint, color: T.coral, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 10 }}>
@@ -286,11 +285,13 @@ function WelcomeStep() {
       </div>
       <div style={{ marginTop: 22, padding: 14, background: T.paper, borderRadius: 10, display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: T.slate }}>
         <Icon name="clock" size={16} color={T.mute} />
-        About <b style={{ color: T.ink }}>8 minutes</b>. We&apos;ll save your progress — close the tab any time.
+        About <b style={{ color: T.ink }}>4 minutes</b>. We&apos;ll save your progress — close the tab any time.
       </div>
     </div>
   );
 }
+
+type LegalType = "self_employed" | "limited_company";
 
 function DetailsStep() {
   const partner = usePartner();
@@ -303,6 +304,32 @@ function DetailsStep() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  // Legal details (mirror the OS add-partner form). Prefilled from the partner row.
+  const [legalType, setLegalType] = useState<LegalType>("self_employed");
+  const [crn, setCrn] = useState("");
+  const [vatRegistered, setVatRegistered] = useState<boolean>(false);
+  const [vatNumber, setVatNumber] = useState("");
+  const [utr, setUtr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    void createClient()
+      .from("partners")
+      .select("partner_legal_type, crn, vat_registered, vat_number, utr")
+      .eq("id", partner.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!alive || !data) return;
+        const d = data as { partner_legal_type?: string | null; crn?: string | null; vat_registered?: boolean | null; vat_number?: string | null; utr?: string | null };
+        setLegalType(d.partner_legal_type === "limited_company" ? "limited_company" : "self_employed");
+        setCrn(d.crn ?? "");
+        setVatRegistered(!!d.vat_registered);
+        setVatNumber(d.vat_number ?? "");
+        setUtr(d.utr ?? "");
+      });
+    return () => { alive = false; };
+  }, [partner.id]);
 
   const uploadPhoto = async (file: File) => {
     setUploadingPhoto(true);
@@ -323,18 +350,43 @@ function DetailsStep() {
     }
   };
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
+    // Validate — mirror the OS add-partner rules.
+    if (legalType === "limited_company") {
+      if (!crn.trim()) {
+        toast({ text: "Company number (CRN) is required for a limited company.", icon: "alert-triangle", tone: "coral" });
+        return false;
+      }
+      if (vatRegistered && !vatNumber.trim()) {
+        toast({ text: "Add your VAT number, or turn VAT registered off.", icon: "alert-triangle", tone: "coral" });
+        return false;
+      }
+    } else if (!utr.trim()) {
+      toast({ text: "Your UTR is required as a sole trader.", icon: "alert-triangle", tone: "coral" });
+      return false;
+    }
     setSaving(true);
     try {
       const { error } = await createClient()
         .from("partners")
-        .update({ contact_name: `${firstName} ${lastName}`.trim(), phone: phone || null, company_name: tradingName || null })
+        .update({
+          contact_name: `${firstName} ${lastName}`.trim(),
+          phone: phone || null,
+          company_name: tradingName || null,
+          partner_legal_type: legalType,
+          crn: legalType === "limited_company" ? crn.trim() || null : null,
+          vat_registered: legalType === "limited_company" ? vatRegistered : false,
+          vat_number: legalType === "limited_company" && vatRegistered ? vatNumber.trim() || null : null,
+          utr: legalType === "self_employed" ? utr.trim() || null : null,
+        })
         .eq("id", partner.id);
       if (error) throw error;
       setSavedAt(new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }));
       toast({ text: "Details saved", icon: "check" });
+      return true;
     } catch (e) {
       toast({ text: e instanceof Error ? e.message : "Couldn't save details", icon: "alert-triangle", tone: "coral" });
+      return false;
     } finally {
       setSaving(false);
     }
@@ -369,8 +421,59 @@ function DetailsStep() {
         <Field label="Last name"><Input value={lastName} onChange={setLastName} placeholder="Last name" /></Field>
         <Field label="Email (verified for sign-in)"><Input value={partner.email} icon="mail" /></Field>
         <Field label="Phone (verified for SMS)"><Input value={phone} onChange={setPhone} icon="phone" placeholder="07…" /></Field>
-        <Field label="Trading name (or limited company)"><Input value={tradingName} onChange={setTradingName} /></Field>
+        <Field label="Trading name / company name"><Input value={tradingName} onChange={setTradingName} /></Field>
       </div>
+
+      {/* Legal — sole trader vs limited company. Drives tax fields + compliance docs. */}
+      <Field label="How do you trade?">
+        <div style={{ display: "inline-flex", gap: 6, background: T.paper2, padding: 3, borderRadius: 10 }}>
+          {([["self_employed", "Sole trader"], ["limited_company", "Limited company"]] as const).map(([v, lbl]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setLegalType(v)}
+              style={{
+                padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 500,
+                background: legalType === v ? T.white : "transparent", color: legalType === v ? T.navy : T.slate,
+                boxShadow: legalType === v ? "0 1px 2px rgba(2,0,64,0.12)" : "none",
+              }}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10, marginBottom: 10 }}>
+        {legalType === "limited_company" ? (
+          <>
+            <Field label="Company number (CRN)"><Input value={crn} onChange={setCrn} placeholder="e.g. 12345678" icon="hash" /></Field>
+            <Field label="VAT registered?">
+              <div style={{ display: "inline-flex", gap: 6, background: T.paper2, padding: 3, borderRadius: 10 }}>
+                {([[true, "Yes"], [false, "No"]] as const).map(([v, lbl]) => (
+                  <button
+                    key={String(v)}
+                    type="button"
+                    onClick={() => setVatRegistered(v)}
+                    style={{
+                      padding: "7px 16px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 500,
+                      background: vatRegistered === v ? T.white : "transparent", color: vatRegistered === v ? T.navy : T.slate,
+                      boxShadow: vatRegistered === v ? "0 1px 2px rgba(2,0,64,0.12)" : "none",
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            {vatRegistered && (
+              <Field label="VAT number"><Input value={vatNumber} onChange={setVatNumber} placeholder="GB123456789" /></Field>
+            )}
+          </>
+        ) : (
+          <Field label="UTR (Unique Taxpayer Reference)"><Input value={utr} onChange={setUtr} placeholder="10-digit UTR" icon="hash" /></Field>
+        )}
+      </div>
+
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
         <Button variant="primary" icon="check" onClick={save} disabled={saving}>
           {saving ? "Saving…" : "Save details"}

@@ -15,7 +15,7 @@ import { usePartner } from "@/components/partner-context";
 import { createClient } from "@/lib/supabase/client";
 import { formatGBPdec } from "@/lib/format";
 import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
-import { fetchPartnerDocuments, REQUIRED_PARTNER_DOCS, missingRequiredDocs, type PartnerDoc } from "@/lib/queries/partner-documents";
+import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
 import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
 import { fetchRateCard, saveRateCard, type ServicePrice } from "@/lib/queries/rate-card";
 import { useRegisterOnboardingSave, useIsOnboarding } from "@/components/onboarding-save";
@@ -30,7 +30,6 @@ import {
   type NotificationPrefs,
 } from "@/lib/queries/partner-settings";
 import { openBillingPortal, startCheckout } from "@/lib/billing";
-import type { Trade } from "@/types";
 
 export interface SettingsPage {
   id: string;
@@ -291,61 +290,89 @@ function ProfilePage() {
 }
 
 // ---------- TRADES & SKILLS ----------
-const ALL_TRADES: Trade[] = [
-  "Plumbing",
-  "General Maintenance",
-  "Light Carpentry",
-  "Electrical",
-  "Painting & Decorating",
-  "Tiling",
-  "Plastering",
-  "Flooring",
-];
+// Trades are the OS service_catalog services the partner offers. One is "primary"
+// (the headline trade). Persists to partners.{trades, trade, catalog_service_ids}.
+interface CatalogTrade {
+  id: string;
+  name: string;
+}
 
 export function TradesPage() {
   const partner = usePartner();
   const toast = useToast();
   const router = useRouter();
   const inOnboarding = useIsOnboarding();
-  const initialEnabled = partner.trades;
-  const initialPrimary = partner.primaryTrade;
-  const [enabled, setEnabled] = useState<Trade[]>(initialEnabled);
-  const [primary, setPrimary] = useState<Trade>(initialPrimary);
+  const [catalog, setCatalog] = useState<CatalogTrade[]>([]);
+  const [enabledIds, setEnabledIds] = useState<Set<string>>(new Set());
+  const [primaryId, setPrimaryId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
-  const dirty =
-    primary !== initialPrimary ||
-    enabled.length !== initialEnabled.length ||
-    enabled.some((t) => !initialEnabled.includes(t));
-
-  const toggle = (t: Trade) => {
-    setEnabled((prev) => {
-      if (prev.includes(t)) {
-        const next = prev.filter((x) => x !== t);
-        if (t === primary) setPrimary(next[0] ?? t); // reassign primary if it was disabled
-        return next;
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const supabase = createClient();
+      const [{ data: cats }, { data: prow }] = await Promise.all([
+        supabase.from("service_catalog").select("id, name").is("deleted_at", null).eq("is_active", true).order("name"),
+        supabase.from("partners").select("catalog_service_ids, trade, trades").eq("id", partner.id).maybeSingle(),
+      ]);
+      if (!alive) return;
+      const list = ((cats ?? []) as { id: string; name: string | null }[]).map((c) => ({ id: c.id, name: c.name || "Service" }));
+      setCatalog(list);
+      const p = prow as { catalog_service_ids?: string[] | null; trade?: string | null; trades?: string[] | null } | null;
+      // Prefill enabled from catalog_service_ids; fall back to matching stored trade names.
+      const ids = new Set<string>();
+      if (p?.catalog_service_ids?.length) {
+        for (const id of p.catalog_service_ids) if (list.some((c) => c.id === id)) ids.add(id);
       }
-      return [...prev, t];
-    });
+      if (ids.size === 0 && p?.trades?.length) {
+        for (const c of list) if (p.trades.includes(c.name)) ids.add(c.id);
+      }
+      setEnabledIds(ids);
+      const primaryByName = p?.trade ? list.find((c) => c.name === p.trade)?.id : undefined;
+      setPrimaryId(primaryByName ?? (ids.size ? [...ids][0] : null));
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [partner.id]);
+
+  const toggle = (id: string) => {
+    setDirty(true);
+    const wasOn = enabledIds.has(id);
+    const next = new Set(enabledIds);
+    if (wasOn) next.delete(id);
+    else next.add(id);
+    setEnabledIds(next);
+    if (wasOn && primaryId === id) setPrimaryId(next.size ? [...next][0] : null);
+    if (!wasOn && !primaryId) setPrimaryId(id);
   };
 
-  const makePrimary = (t: Trade) => {
-    setEnabled((prev) => (prev.includes(t) ? prev : [...prev, t]));
-    setPrimary(t);
+  const makePrimary = (id: string) => {
+    setDirty(true);
+    if (!enabledIds.has(id)) setEnabledIds(new Set(enabledIds).add(id));
+    setPrimaryId(id);
   };
 
   const save = async (): Promise<boolean> => {
-    if (enabled.length === 0) {
+    if (enabledIds.size === 0) {
       toast({ text: "Enable at least one trade.", icon: "alert-triangle", tone: "coral" });
       return false;
     }
+    const primary = primaryId && enabledIds.has(primaryId) ? primaryId : [...enabledIds][0];
     setSaving(true);
     try {
-      const trades = enabled.includes(primary) ? enabled : [primary, ...enabled];
+      const ids = [...enabledIds];
+      const names = ids.map((id) => catalog.find((c) => c.id === id)?.name).filter(Boolean) as string[];
+      const primaryName = catalog.find((c) => c.id === primary)?.name ?? names[0];
+      // Primary first in trades[] — the same denormalisation the OS uses.
+      const trades = [primaryName, ...names.filter((n) => n !== primaryName)];
       const supabase = createClient();
       const { data, error } = await supabase
         .from("partners")
-        .update({ trades, trade: primary })
+        .update({ trades, trade: primaryName, catalog_service_ids: ids })
         .eq("id", partner.id)
         .select("id");
       if (error) throw error;
@@ -354,8 +381,8 @@ export function TradesPage() {
         throw new Error("Save was blocked. Make sure migration 198 is applied (partner self-update RLS).");
       }
       toast({ text: "Trades saved", icon: "check" });
-      // Don't refresh during onboarding — it re-runs the server page and closes the modal instead
-      // of advancing. In Settings it's fine and keeps the partner context current.
+      setDirty(false);
+      // Don't refresh during onboarding — it re-runs the server page and closes the modal.
       if (!inOnboarding) router.refresh();
       return true;
     } catch (e) {
@@ -369,57 +396,45 @@ export function TradesPage() {
 
   return (
     <>
-      <SettingsHeader title="Trades & skills" subtitle="What you do, what you don't. We only send leads matching enabled trades." />
-      <PageCard title="Trades">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
-          {ALL_TRADES.map((name) => {
-            const on = enabled.includes(name);
-            const isPrimary = on && name === primary;
-            return (
-              <div
-                key={name}
-                style={{ padding: 14, borderRadius: 10, border: `1px solid ${isPrimary ? T.coral : T.line}`, background: on ? T.white : T.paper, opacity: on ? 1 : 0.85 }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 500, color: T.ink, flex: 1 }}>{name}</span>
-                  {isPrimary && <Badge tone="coral" size="sm">Primary</Badge>}
-                  <Toggle on={on} onChange={() => toggle(name)} />
+      <SettingsHeader title="Trades & skills" subtitle="The services you offer. Pick the ones you do and set one as your primary — we only send work matching your enabled trades." />
+      <PageCard title="Services we offer">
+        {loading ? (
+          <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="loader" size={14} color={T.mute} /> Loading services…
+          </div>
+        ) : catalog.length === 0 ? (
+          <div style={{ fontSize: 13, color: T.mute }}>No services published yet.</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+            {catalog.map((c) => {
+              const on = enabledIds.has(c.id);
+              const isPrimary = on && c.id === primaryId;
+              return (
+                <div
+                  key={c.id}
+                  style={{ padding: 14, borderRadius: 10, border: `1px solid ${isPrimary ? T.coral : T.line}`, background: on ? T.white : T.paper, opacity: on ? 1 : 0.85 }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13.5, fontWeight: 500, color: T.ink, flex: 1 }}>{c.name}</span>
+                    {isPrimary && <Badge tone="coral" size="sm">Primary</Badge>}
+                    <Toggle on={on} onChange={() => toggle(c.id)} />
+                  </div>
+                  {on && !isPrimary && (
+                    <button
+                      onClick={() => makePrimary(c.id)}
+                      style={{ marginTop: 10, padding: 0, background: "transparent", border: "none", color: T.coral, fontFamily: T.sans, fontSize: 12, fontWeight: 500, cursor: "pointer" }}
+                    >
+                      Make primary
+                    </button>
+                  )}
                 </div>
-                {on && !isPrimary && (
-                  <button
-                    onClick={() => makePrimary(name)}
-                    style={{
-                      marginTop: 10,
-                      padding: 0,
-                      background: "transparent",
-                      border: "none",
-                      color: T.coral,
-                      fontFamily: T.sans,
-                      fontSize: 12,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Make primary
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </PageCard>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button
-          variant="ghost"
-          onClick={() => {
-            setEnabled(initialEnabled);
-            setPrimary(initialPrimary);
-          }}
-          disabled={!dirty || saving}
-        >
-          Cancel
-        </Button>
-        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving || loading}>
           {saving ? "Saving…" : "Save trades"}
         </Button>
       </div>
@@ -435,6 +450,7 @@ export function RatesPage() {
   const toast = useToast();
   const [rows, setRows] = useState<ServicePrice[]>([]);
   const [initial, setInitial] = useState<ServicePrice[]>([]);
+  const [tradeCount, setTradeCount] = useState<number>(partner.trades.length);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -445,10 +461,16 @@ export function RatesPage() {
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchRateCard(createClient(), partner.id, partner.trades);
+        const supabase = createClient();
+        // Read trades from the DB — the partner context can be stale mid-onboarding
+        // (trades were just saved in the Trades step but the context hasn't refreshed).
+        const { data: prow } = await supabase.from("partners").select("trades").eq("id", partner.id).maybeSingle();
+        const trades = ((prow as { trades?: string[] | null } | null)?.trades ?? partner.trades) ?? [];
+        const data = await fetchRateCard(supabase, partner.id, trades);
         if (!cancelled) {
           setRows(data);
           setInitial(data);
+          setTradeCount(trades.length);
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load rate card");
@@ -466,12 +488,21 @@ export function RatesPage() {
   const update = (catalogServiceId: string, patch: Partial<ServicePrice>) =>
     setRows((prev) => prev.map((r) => (r.catalogServiceId === catalogServiceId ? { ...r, ...patch } : r)));
   const num = (v: string): number | null => (v.trim() === "" ? null : Number(v.replace(/[^0-9.]/g, "")) || 0);
+  // The partner can match or undercut our customer price, but never exceed it.
+  const clampTo = (v: number | null, ceiling: number): number | null => (v == null ? null : Math.min(Math.max(0, v), ceiling));
 
   const save = async () => {
     setSaving(true);
     try {
-      await saveRateCard(createClient(), partner.id, rows);
-      setInitial(rows);
+      // Defence-in-depth: clamp every override to its sell ceiling before persisting.
+      const clamped = rows.map((r) => ({
+        ...r,
+        fixedPartnerCost: clampTo(r.fixedPartnerCost, r.standardFixed),
+        hourlyPartnerRate: clampTo(r.hourlyPartnerRate, r.standardHourly),
+      }));
+      await saveRateCard(createClient(), partner.id, clamped);
+      setInitial(clamped);
+      setRows(clamped);
       toast({ text: "Rate card saved", icon: "check" });
     } catch (e) {
       toast({ text: e instanceof Error ? e.message : "Couldn't save rate card", icon: "alert-triangle", tone: "coral" });
@@ -494,7 +525,7 @@ export function RatesPage() {
       ) : rows.length === 0 ? (
         <PageCard title="Services">
           <div style={{ fontSize: 13, color: T.mute }}>
-            {partner.trades.length === 0
+            {tradeCount === 0
               ? "Add your trades first (Trades & skills) — the matching services then appear here to price."
               : "No catalog services match your trades yet. Once Fixfy has services for your trades, they'll appear here."}
           </div>
@@ -518,34 +549,58 @@ export function RatesPage() {
                       <Toggle on={r.useStandard} onChange={(v) => update(r.catalogServiceId, { useStandard: v })} />
                     </div>
                     {!r.useStandard && (
-                      <div style={{ display: "flex", gap: 8, paddingLeft: 2 }}>
-                        {r.mode === "hourly" ? (
-                          <>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 2 }}>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {r.mode === "hourly" ? (
+                            <>
+                              <Input
+                                value={r.hourlyPartnerRate != null ? String(r.hourlyPartnerRate) : ""}
+                                onChange={(v) => update(r.catalogServiceId, { hourlyPartnerRate: clampTo(num(v), r.standardHourly) })}
+                                prefix="£"
+                                suffix="/hr"
+                                placeholder={String(r.standardHourly)}
+                                style={{ width: 160 }}
+                              />
+                              <Input
+                                value={r.defaultHours != null ? String(r.defaultHours) : ""}
+                                onChange={(v) => update(r.catalogServiceId, { defaultHours: num(v) })}
+                                suffix="hrs"
+                                placeholder={String(r.standardHours)}
+                                style={{ width: 120 }}
+                              />
+                            </>
+                          ) : (
                             <Input
-                              value={r.hourlyPartnerRate != null ? String(r.hourlyPartnerRate) : ""}
-                              onChange={(v) => update(r.catalogServiceId, { hourlyPartnerRate: num(v) })}
+                              value={r.fixedPartnerCost != null ? String(r.fixedPartnerCost) : ""}
+                              onChange={(v) => update(r.catalogServiceId, { fixedPartnerCost: clampTo(num(v), r.standardFixed) })}
                               prefix="£"
-                              suffix="/hr"
-                              placeholder={String(r.standardHourly)}
-                              style={{ width: 160 }}
+                              placeholder={String(r.standardFixed)}
+                              style={{ width: 180 }}
                             />
-                            <Input
-                              value={r.defaultHours != null ? String(r.defaultHours) : ""}
-                              onChange={(v) => update(r.catalogServiceId, { defaultHours: num(v) })}
-                              suffix="hrs"
-                              placeholder={String(r.standardHours)}
-                              style={{ width: 120 }}
-                            />
-                          </>
-                        ) : (
-                          <Input
-                            value={r.fixedPartnerCost != null ? String(r.fixedPartnerCost) : ""}
-                            onChange={(v) => update(r.catalogServiceId, { fixedPartnerCost: num(v) })}
-                            prefix="£"
-                            placeholder={String(r.standardFixed)}
-                            style={{ width: 180 }}
-                          />
-                        )}
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: T.mute }}>
+                          Max <span className="fx-mono">{r.mode === "hourly" ? `${formatGBPdec(r.standardHourly)}/hr` : formatGBPdec(r.standardFixed)}</span> — our customer price. Match it or go lower; you can&apos;t charge above it.
+                        </div>
+                      </div>
+                    )}
+                    {(r.bands.length > 0 || r.addons.length > 0) && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingTop: 8, borderTop: `1px dashed ${T.line}` }}>
+                        <span style={{ fontSize: 10.5, color: T.mute, alignSelf: "center", marginRight: 2, letterSpacing: 0.3 }}>ON SOME JOBS:</span>
+                        {r.bands.map((b) => (
+                          <span key={`b-${b.id}`} title="Pricing band — applies on jobs that use it" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", background: T.paper2, color: T.slate, borderRadius: 6, fontSize: 11 }}>
+                            <Icon name="layers" size={11} color={T.mute} />
+                            {b.label}
+                            {b.fixed_price != null && <span className="fx-mono">· {formatGBPdec(b.fixed_price)}</span>}
+                          </span>
+                        ))}
+                        {r.addons.map((a) => (
+                          <span key={`a-${a.id}`} title="Add-on — applies on jobs that include it" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", background: T.paper2, color: T.slate, borderRadius: 6, fontSize: 11 }}>
+                            <Icon name="plus" size={11} color={T.mute} />
+                            {a.label}
+                            <span className="fx-mono">· {formatGBPdec(a.fixed_price)}</span>
+                          </span>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -687,37 +742,92 @@ export function AvailabilityPage() {
 }
 
 // ---------- SERVICE AREA ----------
+type CoverageMode = "radius" | "postcodes";
+
 export function ServiceAreaPage() {
   const partner = usePartner();
   const toast = useToast();
-  const initial = {
-    postcode: partner.postcode,
-    radius: partner.radiusMiles,
-    excluded: (partner.excludedPostcodes ?? []).join(", "),
-  };
-  const [form, setForm] = useState(initial);
+  const [mode, setMode] = useState<CoverageMode>("radius");
+  const [postcode, setPostcode] = useState(partner.postcode);
+  const [radius, setRadius] = useState(partner.radiusMiles || 10);
+  const [excluded, setExcluded] = useState((partner.excludedPostcodes ?? []).join(", "));
+  const [included, setIncluded] = useState<string[]>([]);
+  const [pcInput, setPcInput] = useState("");
   const [saving, setSaving] = useState(false);
-  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  const [dirty, setDirty] = useState(false);
 
-  const save = async () => {
+  // Prefill coverage mode + postcode list (not in the partner context).
+  useEffect(() => {
+    let alive = true;
+    void createClient()
+      .from("partners")
+      .select("coverage_mode, included_postcodes, coverage_base_postcode")
+      .eq("id", partner.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!alive || !data) return;
+        const d = data as { coverage_mode?: string | null; included_postcodes?: string[] | null; coverage_base_postcode?: string | null };
+        if (d.coverage_mode === "postcodes") setMode("postcodes");
+        if (d.included_postcodes?.length) setIncluded(d.included_postcodes);
+        if (d.coverage_base_postcode && !partner.postcode) setPostcode(d.coverage_base_postcode);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [partner.id, partner.postcode]);
+
+  const setModeDirty = (m: CoverageMode) => {
+    setMode(m);
+    setDirty(true);
+  };
+  const addPostcode = () => {
+    const code = pcInput.trim().toUpperCase().replace(/\s+/g, "");
+    if (!code) return;
+    if (!included.includes(code)) {
+      setIncluded((p) => [...p, code]);
+      setDirty(true);
+    }
+    setPcInput("");
+  };
+  const removePostcode = (code: string) => {
+    setIncluded((p) => p.filter((c) => c !== code));
+    setDirty(true);
+  };
+
+  const save = async (): Promise<boolean> => {
+    if (mode === "postcodes" && included.length === 0) {
+      toast({ text: "Add at least one postcode area you cover.", icon: "alert-triangle", tone: "coral" });
+      return false;
+    }
     setSaving(true);
     try {
-      const excluded = form.excluded
-        .split(",")
-        .map((s) => s.trim().toUpperCase())
-        .filter(Boolean);
-      // partners.location is NOT NULL — use "" (never null) so a partner who hasn't set a postcode
-      // yet (fresh sign-up in onboarding) can still save the radius/exclusions.
-      const { error } = await createClient()
-        .from("partners")
-        .update({ location: form.postcode.trim(), service_radius_miles: form.radius, excluded_postcodes: excluded })
-        .eq("id", partner.id);
+      const excludedArr = excluded.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+      // partners.location is NOT NULL — always write a string. Clear the unused mode's fields.
+      const patch =
+        mode === "radius"
+          ? {
+              location: postcode.trim(),
+              coverage_mode: "radius",
+              coverage_base_postcode: postcode.trim() || null,
+              service_radius_miles: radius,
+              excluded_postcodes: excludedArr,
+              included_postcodes: null,
+            }
+          : {
+              location: postcode.trim(),
+              coverage_mode: "postcodes",
+              included_postcodes: included,
+              excluded_postcodes: excludedArr,
+            };
+      const { error } = await createClient().from("partners").update(patch).eq("id", partner.id);
       if (error) throw error;
+      setDirty(false);
       toast({ text: "Service area saved", icon: "check" });
+      return true;
     } catch (e) {
-      // Supabase errors aren't Error instances — read .message off the object so the real cause shows.
       const msg = e instanceof Error ? e.message : (e as { message?: string } | null)?.message;
       toast({ text: msg || "Couldn't save service area", icon: "alert-triangle", tone: "coral" });
+      return false;
     } finally {
       setSaving(false);
     }
@@ -727,46 +837,93 @@ export function ServiceAreaPage() {
 
   return (
     <>
-      <SettingsHeader title="Service area" subtitle="Where you work. Bigger area = more matches, more drive time." />
+      <SettingsHeader title="Service area" subtitle="Where you work. Cover by distance from a base postcode, or list the exact postcode areas you take." />
       <PageCard title="Coverage">
-        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Row label="Base postcode" columns="1fr">
-              <Input value={form.postcode} onChange={(v) => setForm((f) => ({ ...f, postcode: v }))} icon="map-pin" placeholder="e.g. SW11 4PG" />
-            </Row>
-            <Row label="Radius" columns="1fr">
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input
-                  type="range"
-                  min={1}
-                  max={20}
-                  value={form.radius}
-                  onChange={(e) => setForm((f) => ({ ...f, radius: Number(e.target.value) }))}
-                  style={{ flex: 1, accentColor: T.coral }}
-                />
-                <span className="fx-mono" style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>
-                  {form.radius} mi
-                </span>
-              </div>
-            </Row>
-            <Row label="Excluded postcodes" hint="Comma-separated" columns="1fr">
-              <Input value={form.excluded} onChange={(v) => setForm((f) => ({ ...f, excluded: v }))} placeholder="e.g. SE1, E14" />
-            </Row>
-          </div>
-          <div style={{ position: "relative" }}>
-            <ServiceAreaMap postcode={form.postcode} radiusMiles={form.radius} minHeight={320} />
-            {form.postcode && (
-              <div style={{ position: "absolute", bottom: 12, left: 12, zIndex: 1, padding: "8px 12px", background: T.white, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 11.5, color: T.slate, lineHeight: 1.5 }}>
-                <div>
-                  <b>{form.postcode}</b> · {form.radius} mi radius
-                </div>
-              </div>
-            )}
-          </div>
+        {/* Mode toggle */}
+        <div style={{ display: "inline-flex", gap: 6, background: T.paper2, padding: 3, borderRadius: 10, marginBottom: 14 }}>
+          {([["radius", "By distance (miles)"], ["postcodes", "By postcode areas"]] as const).map(([v, lbl]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setModeDirty(v)}
+              style={{
+                padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 500,
+                background: mode === v ? T.white : "transparent", color: mode === v ? T.navy : T.slate,
+                boxShadow: mode === v ? "0 1px 2px rgba(2,0,64,0.12)" : "none",
+              }}
+            >
+              {lbl}
+            </button>
+          ))}
         </div>
+
+        {mode === "radius" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Row label="Base postcode" columns="1fr">
+                <Input value={postcode} onChange={(v) => { setPostcode(v); setDirty(true); }} icon="map-pin" placeholder="e.g. SW11 4PG" />
+              </Row>
+              <Row label="Radius" columns="1fr">
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <input
+                    type="range"
+                    min={1}
+                    max={50}
+                    value={radius}
+                    onChange={(e) => { setRadius(Number(e.target.value)); setDirty(true); }}
+                    style={{ flex: 1, accentColor: T.coral }}
+                  />
+                  <span className="fx-mono" style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{radius} mi</span>
+                </div>
+              </Row>
+              <Row label="Excluded postcodes" hint="Comma-separated" columns="1fr">
+                <Input value={excluded} onChange={(v) => { setExcluded(v); setDirty(true); }} placeholder="e.g. SE1, E14" />
+              </Row>
+            </div>
+            <div style={{ position: "relative" }}>
+              <ServiceAreaMap postcode={postcode} radiusMiles={radius} minHeight={320} />
+              {postcode && (
+                <div style={{ position: "absolute", bottom: 12, left: 12, zIndex: 1, padding: "8px 12px", background: T.white, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 11.5, color: T.slate, lineHeight: 1.5 }}>
+                  <div><b>{postcode}</b> · {radius} mi radius</div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 520 }}>
+            <Row label="Add postcode areas" hint="Outward codes only, e.g. SW11, E14, BR1" columns="1fr">
+              <div style={{ display: "flex", gap: 8 }}>
+                <Input
+                  value={pcInput}
+                  onChange={setPcInput}
+                  icon="map-pin"
+                  placeholder="e.g. SW11"
+                  style={{ flex: 1 }}
+                />
+                <Button variant="secondary" icon="plus" onClick={addPostcode}>Add</Button>
+              </div>
+            </Row>
+            {included.length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {included.map((code) => (
+                  <span key={code} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: T.coralTint, color: T.coral, borderRadius: 9999, fontSize: 12.5, fontWeight: 500, fontFamily: T.mono }}>
+                    {code}
+                    <button onClick={() => removePostcode(code)} style={{ padding: 0, background: "transparent", border: "none", cursor: "pointer", display: "inline-flex", color: T.coral }} aria-label={`Remove ${code}`}>
+                      <Icon name="x" size={12} color={T.coral} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: T.mute }}>No areas added yet — add the postcode districts you cover.</div>
+            )}
+            <Row label="Excluded postcodes" hint="Comma-separated" columns="1fr">
+              <Input value={excluded} onChange={(v) => { setExcluded(v); setDirty(true); }} placeholder="e.g. SE1, E14" />
+            </Row>
+          </div>
+        )}
       </PageCard>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="ghost" onClick={() => setForm(initial)} disabled={!dirty || saving}>Cancel</Button>
         <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save service area"}
         </Button>
@@ -1261,10 +1418,18 @@ function RadioOption({ selected, label, hint }: { selected: boolean; label: stri
 }
 
 // ---------- DOCS ----------
+interface RequiredDoc {
+  docType: string;
+  name: string;
+  description: string;
+  group?: string;
+}
+
 export function DocsPage({ onChanged }: { onChanged?: () => void } = {}) {
   const partner = usePartner();
   const toast = useToast();
   const [docs, setDocs] = useState<PartnerDoc[]>([]);
+  const [required, setRequired] = useState<RequiredDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyType, setBusyType] = useState<string | null>(null);
@@ -1272,8 +1437,16 @@ export function DocsPage({ onChanged }: { onChanged?: () => void } = {}) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const rows = await fetchPartnerDocuments(createClient(), partner.id);
+      // Required docs are dynamic — they depend on the partner's legal type + trades
+      // (set in the earlier onboarding steps), resolved server-side via the OS doc rules.
+      const [rows, reqJson] = await Promise.all([
+        fetchPartnerDocuments(createClient(), partner.id),
+        fetch("/api/partner/required-docs")
+          .then((r) => r.json())
+          .catch(() => ({ required: [] as RequiredDoc[] })),
+      ]);
       setDocs(rows);
+      if (Array.isArray(reqJson?.required)) setRequired(reqJson.required as RequiredDoc[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load documents");
     } finally {
@@ -1305,8 +1478,9 @@ export function DocsPage({ onChanged }: { onChanged?: () => void } = {}) {
     }
   };
 
-  const missing = missingRequiredDocs(docs);
-  const extraDocs = docs.filter((d) => !REQUIRED_PARTNER_DOCS.some((r) => r.docType === d.docType));
+  const SATISFY: ReadonlySet<string> = new Set(["verified", "pending"]);
+  const missing = required.filter((req) => !docs.some((d) => d.docType === req.docType && SATISFY.has(d.status)));
+  const extraDocs = docs.filter((d) => !required.some((r) => r.docType === d.docType));
 
   return (
     <>
@@ -1339,7 +1513,7 @@ export function DocsPage({ onChanged }: { onChanged?: () => void } = {}) {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {REQUIRED_PARTNER_DOCS.map((req) => {
+            {required.map((req) => {
               const doc = docs.find((d) => d.docType === req.docType && d.status !== "rejected");
               return (
                 <RequiredDocCard

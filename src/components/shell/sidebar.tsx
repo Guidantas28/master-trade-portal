@@ -18,21 +18,22 @@ interface NavItem {
   hot?: boolean;
 }
 
-// Badges are derived from real data at render time (see Sidebar). No hardcoded counts.
+// Original section structure kept; only the item labels are renamed. Badges are
+// derived from real data at render time (see Sidebar) — no hardcoded counts.
 const NAV: { section: string; items: NavItem[] }[] = [
   { section: "Workspace", items: [{ id: "dashboard", label: "Dashboard", icon: "layout-dashboard" }] },
   {
     section: "Opportunities",
     items: [
-      { id: "leads", label: "Leads", icon: "sparkles" },
-      { id: "available", label: "Available jobs", icon: "wrench" },
-      { id: "quotes", label: "Available quotes", icon: "file-text" },
+      { id: "leads", label: "Hot Leads", icon: "sparkles", hot: true },
+      { id: "available", label: "Available Jobs", icon: "wrench" },
+      { id: "quotes", label: "Available Quotes", icon: "file-text" },
     ],
   },
   {
     section: "Operations",
     items: [
-      { id: "jobs", label: "My jobs", icon: "briefcase" },
+      { id: "jobs", label: "Active Jobs", icon: "briefcase" },
       { id: "schedule", label: "Schedule", icon: "calendar" },
     ],
   },
@@ -88,8 +89,8 @@ export function Sidebar({
           gap: 10,
           padding: isDense ? "6px 10px" : "7px 10px",
           borderRadius: 8,
-          background: sel ? T.paper : h ? "rgba(2,0,64,0.04)" : "transparent",
-          color: sel ? T.navy : T.slate,
+          background: sel ? "rgba(255,255,255,0.09)" : h ? "rgba(255,255,255,0.05)" : "transparent",
+          color: sel ? T.white : "rgba(255,255,255,0.66)",
           fontSize: 13,
           fontWeight: sel ? 500 : 400,
           cursor: "pointer",
@@ -111,7 +112,7 @@ export function Sidebar({
           />
         )}
         <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-          <Icon name={item.icon} size={16} color={sel ? T.navy : T.mute} />
+          <Icon name={item.icon} size={16} color={sel ? T.white : item.hot ? T.coral : "rgba(255,255,255,0.5)"} />
           {item.label}
         </span>
         {item.badge != null && (
@@ -120,8 +121,8 @@ export function Sidebar({
               fontFamily: T.mono,
               fontSize: 10.5,
               padding: "1px 6px",
-              background: item.hot ? T.coralTint : sel ? T.navy : T.line,
-              color: item.hot ? T.coral : sel ? T.white : T.slate,
+              background: T.coral,
+              color: T.white,
               borderRadius: 9999,
               fontWeight: 500,
             }}
@@ -139,8 +140,8 @@ export function Sidebar({
         width: 240,
         flex: "0 0 240px",
         height: "100vh",
-        background: T.white,
-        borderRight: `1px solid ${T.line}`,
+        background: T.ink,
+        borderRight: `1px solid rgba(255,255,255,0.06)`,
         display: "flex",
         flexDirection: "column",
         padding: "14px 12px 12px",
@@ -148,14 +149,14 @@ export function Sidebar({
     >
       {/* Logo */}
       <div style={{ padding: "4px 8px 16px", display: "flex", alignItems: "center", gap: 8 }}>
-        <Wordmark />
+        <Wordmark color={T.white} />
         <span
           style={{
             fontSize: 10,
             fontWeight: 500,
-            color: T.mute,
+            color: "rgba(255,255,255,0.6)",
             padding: "2px 6px",
-            background: T.paper2,
+            background: "rgba(255,255,255,0.08)",
             borderRadius: 4,
             letterSpacing: 0.4,
             marginLeft: "auto",
@@ -167,20 +168,22 @@ export function Sidebar({
 
       {/* Nav sections */}
       <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
-        {NAV.map((section) => (
-          <div key={section.section}>
-            <div
-              style={{
-                fontSize: 10,
-                letterSpacing: 0.6,
-                textTransform: "uppercase",
-                color: T.mute,
-                padding: "0 10px 6px",
-                fontWeight: 500,
-              }}
-            >
-              {section.section}
-            </div>
+        {NAV.map((section, si) => (
+          <div key={si}>
+            {section.section ? (
+              <div
+                style={{
+                  fontSize: 10,
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                  color: "rgba(255,255,255,0.4)",
+                  padding: "0 10px 6px",
+                  fontWeight: 500,
+                }}
+              >
+                {section.section}
+              </div>
+            ) : null}
             <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
               {section.items.map((i) => {
                 const badge = badgeFor(i.id);
@@ -207,7 +210,8 @@ function TrialCard({ onUpgrade }: { onUpgrade: () => void }) {
         margin: "12px 0 8px",
         padding: 12,
         borderRadius: 10,
-        background: T.navy,
+        background: "rgba(255,255,255,0.05)",
+        border: "1px solid rgba(255,255,255,0.08)",
         color: T.white,
         display: "flex",
         flexDirection: "column",
@@ -286,19 +290,19 @@ function UserMiniCard({
           gap: 10,
           padding: "8px 10px",
           borderRadius: 8,
-          border: `1px solid ${T.line}`,
-          background: T.white,
+          border: `1px solid rgba(255,255,255,0.1)`,
+          background: "rgba(255,255,255,0.05)",
           cursor: "pointer",
           textAlign: "left",
         }}
       >
-        <Avatar initials={partner.initials} size={28} bg={T.navy} />
+        <Avatar initials={partner.initials} size={28} bg={T.coral} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
               fontSize: 12.5,
               fontWeight: 500,
-              color: T.ink,
+              color: T.white,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -306,9 +310,9 @@ function UserMiniCard({
           >
             {partner.firstName} {partner.lastName}
           </div>
-          <div style={{ fontSize: 11, color: T.mute }}>{partner.primaryTrade}</div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{partner.primaryTrade}</div>
         </div>
-        <Icon name="chevrons-up-down" size={14} color={T.mute} />
+        <Icon name="chevrons-up-down" size={14} color="rgba(255,255,255,0.5)" />
       </button>
       {open && (
         <div

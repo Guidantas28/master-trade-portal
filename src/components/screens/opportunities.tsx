@@ -379,7 +379,14 @@ export function AvailableJobsView({ onShowToast }: { onShowToast: ShowToast }) {
         setJobs((prev) => prev.filter((j) => j.id !== job.id));
         myJobs.refresh();
       } else if (res.ok) {
-        onShowToast({ icon: "lock", text: "Too late — another trade took this one." });
+        // accepted:false — distinguish "someone else took it" (job_taken) from an
+        // offer that was withdrawn/expired/cancelled (gone), which the OS explains
+        // in `message`. Showing "another trade took this" for an expired offer is wrong.
+        const text =
+          json.error === "job_taken"
+            ? "Too late — another trade took this one."
+            : json.message || "This offer is no longer available.";
+        onShowToast({ icon: "lock", text });
         setJobs((prev) => prev.filter((j) => j.id !== job.id));
       } else {
         onShowToast({

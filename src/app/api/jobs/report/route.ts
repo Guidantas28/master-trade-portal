@@ -7,8 +7,26 @@
 // The partner is resolved from the session and must own the job (jobs.partner_id).
 
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getPartnerSession } from "@/lib/partner-auth";
-import { createServiceClient } from "@/lib/supabase/service";
+import { createServiceClient, tryCreateServiceClient } from "@/lib/supabase/service";
+
+/** Fresh 503 response (a NextResponse body can only be consumed once). */
+const misconfig = () =>
+  NextResponse.json(
+    { error: "Server configuration error", code: "server_misconfigured", message: "SERVICE_ROLE_KEY is not set on the trade portal." },
+    { status: 503 },
+  );
+
+/** Map a File's mime type to a storage extension. Defaults to jpg. */
+function extForType(type: string | undefined): string {
+  const t = (type ?? "").toLowerCase();
+  if (t.includes("png")) return "png";
+  if (t.includes("webp")) return "webp";
+  if (t.includes("gif")) return "gif";
+  if (t.includes("heic")) return "heic";
+  return "jpg";
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,7 +47,8 @@ export async function GET(req: Request) {
   const jobId = new URL(req.url).searchParams.get("jobId");
   if (!jobId) return NextResponse.json({ error: "jobId required" }, { status: 400 });
 
-  const svc = createServiceClient();
+  const svc = tryCreateServiceClient();
+  if (!svc) return misconfig();
   const { data: job } = await svc
     .from("jobs")
     .select("id, partner_id, start_report, final_report, start_report_submitted, final_report_submitted")
@@ -78,7 +97,8 @@ export async function POST(req: Request) {
     (photoEntries[m[1]] ??= []).push(value);
   }
 
-  const svc = createServiceClient();
+  const svc = tryCreateServiceClient();
+  if (!svc) return misconfig();
   const { data: job } = await svc
     .from("jobs")
     .select("id, reference, status, partner_id, start_report_submitted, final_report_submitted")
@@ -94,14 +114,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "A report has already been submitted for this job." }, { status: 409 });
   }
 
-  const startPhotos = await uploadSlotPhotos(svc, job.id, "start", photoEntries, template);
-  const finalPhotos = await uploadSlotPhotos(svc, job.id, "final", photoEntries, template);
+  const failures: string[] = [];
+  const startPhotos = await uploadSlotPhotos(svc, job.id, "start", photoEntries, template, failures);
+  const finalPhotos = await uploadSlotPhotos(svc, job.id, "final", photoEntries, template, failures);
+
+  // Don't silently lose evidence: if any photo failed to upload, abort WITHOUT
+  // flipping the job to final_check, so the partner can retry instead of being
+  // locked into a "submitted" report missing photos.
+  if (failures.length > 0) {
+    return NextResponse.json(
+      { error: `${failures.length} photo${failures.length === 1 ? "" : "s"} failed to upload — please check your connection and try again.`, code: "photo_upload_failed" },
+      { status: 502 },
+    );
+  }
 
   const now = new Date().toISOString();
   const startPayload = { template, submitted_at: now, photos: startPhotos, ...startData };
   const finalPayload = { template, submitted_at: now, photos: finalPhotos, ...finalData };
 
-  const { error: updErr } = await svc
+  const { data: updated, error: updErr } = await svc
     .from("jobs")
     .update({
       // Partner submission auto-approves the report (approved_at = now) and moves the job to
@@ -117,12 +148,24 @@ export async function POST(req: Request) {
       final_report_skipped: false,
       final_report_approved_at: now,
       status: "final_check",
+      // Close the work timer — the job is done. Without this the elapsed clock
+      // would run forever and OS payout/duration logic would read an unbounded time.
+      partner_timer_ended_at: now,
+      partner_timer_is_paused: false,
       updated_at: now,
     })
-    .eq("id", job.id);
+    // Atomic guard against a double-submit race: only the first submission (where
+    // final_report_submitted is still false) wins; a concurrent second one updates
+    // 0 rows and is treated as "already submitted".
+    .eq("id", job.id)
+    .eq("final_report_submitted", false)
+    .select("id");
   if (updErr) {
     console.error("[jobs/report] update failed:", updErr);
     return NextResponse.json({ error: "Could not save the report." }, { status: 500 });
+  }
+  if (!updated || updated.length === 0) {
+    return NextResponse.json({ error: "A report has already been submitted for this job." }, { status: 409 });
   }
 
   void svc
@@ -144,17 +187,20 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: true, jobReference: job.reference });
 }
 
-/** Cleaner: returns `{ slot: [urls...] }` map; others return flat array. Matches normalizeReport. */
+/** Cleaner: returns `{ slot: [urls...] }` map; others return flat array. Matches normalizeReport.
+ *  Failed uploads are collected into `failures` so the caller can abort instead of
+ *  silently dropping the partner's evidence. */
 async function uploadSlotPhotos(
   svc: Svc,
   jobId: string,
   kind: "start" | "final",
   photoEntries: Record<string, File[]>,
   template: string,
+  failures: string[],
 ): Promise<string[] | Record<string, string[]>> {
   if (template !== "cleaner") {
     const flatSlot = kind === "start" ? "before" : "after";
-    return uploadFlat(svc, jobId, kind, photoEntries[flatSlot] ?? []);
+    return uploadFlat(svc, jobId, kind, photoEntries[flatSlot] ?? [], failures);
   }
   const allowed =
     kind === "start"
@@ -163,25 +209,27 @@ async function uploadSlotPhotos(
   const result: Record<string, string[]> = {};
   for (const [slot, files] of Object.entries(photoEntries)) {
     if (!allowed.has(slot)) continue;
-    result[slot] = await uploadFlat(svc, jobId, `${kind}-${slot}`, files);
+    result[slot] = await uploadFlat(svc, jobId, `${kind}-${slot}`, files, failures);
   }
   return result;
 }
 
-async function uploadFlat(svc: Svc, jobId: string, prefix: string, files: File[]): Promise<string[]> {
+async function uploadFlat(svc: Svc, jobId: string, prefix: string, files: File[], failures: string[]): Promise<string[]> {
   const out: string[] = [];
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const path = `${jobId}/${prefix}-${i}-${ts}.jpg`;
+    // UUID path (collision-proof) + real extension from the file's mime type.
+    const path = `${jobId}/${prefix}-${randomUUID()}.${extForType(f.type)}`;
     const { error } = await svc.storage.from(BUCKET).upload(path, bytes, { contentType: f.type || "image/jpeg", upsert: false });
     if (error) {
       console.error("[jobs/report] photo upload failed:", error);
+      failures.push(`${prefix}-${i}`);
       continue;
     }
     const { data } = svc.storage.from(BUCKET).getPublicUrl(path);
     if (data?.publicUrl) out.push(data.publicUrl);
+    else failures.push(`${prefix}-${i}`);
   }
   return out;
 }

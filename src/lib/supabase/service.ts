@@ -35,3 +35,14 @@ export function createServiceClient() {
 export function isServiceRoleConfigured(): boolean {
   return !!(getSupabaseUrl() && getServiceRoleKey());
 }
+
+/** Non-throwing variant — returns null when the service env is missing so routes
+ *  can answer 503 (server_misconfigured) instead of leaking an opaque 500. */
+export function tryCreateServiceClient(): ReturnType<typeof createServiceClient> | null {
+  try {
+    return createServiceClient();
+  } catch (err) {
+    console.error("[service] createServiceClient failed:", err);
+    return null;
+  }
+}

@@ -8,7 +8,13 @@
 
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
-import { createServiceClient } from "@/lib/supabase/service";
+import { createServiceClient, tryCreateServiceClient } from "@/lib/supabase/service";
+
+const misconfig = () =>
+  NextResponse.json(
+    { error: "Server configuration error", code: "server_misconfigured", message: "SERVICE_ROLE_KEY is not set on the trade portal." },
+    { status: 503 },
+  );
 
 const BUCKET = "job-photos";
 const SIGNED_TTL = 60 * 60; // 1h
@@ -30,7 +36,8 @@ export async function GET(req: Request) {
   const jobId = new URL(req.url).searchParams.get("jobId");
   if (!jobId) return NextResponse.json({ error: "jobId required" }, { status: 400 });
 
-  const svc = createServiceClient();
+  const svc = tryCreateServiceClient();
+  if (!svc) return misconfig();
   if (!(await partnerOwnsJob(svc, jobId, session.partnerId))) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { data, error } = await svc.from("job_photos").select("id,kind,path,created_at").eq("job_id", jobId).order("created_at");
@@ -54,7 +61,8 @@ export async function POST(req: Request) {
   }
   if (file.size > 10 * 1024 * 1024) return NextResponse.json({ error: "Max 10 MB" }, { status: 400 });
 
-  const svc = createServiceClient();
+  const svc = tryCreateServiceClient();
+  if (!svc) return misconfig();
   if (!(await partnerOwnsJob(svc, jobId, session.partnerId))) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const ext = EXT[file.type] ?? "jpg";
@@ -81,7 +89,8 @@ export async function DELETE(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-  const svc = createServiceClient();
+  const svc = tryCreateServiceClient();
+  if (!svc) return misconfig();
   const { data: row } = await svc.from("job_photos").select("id,path,partner_id").eq("id", id).maybeSingle();
   if (!row || row.partner_id !== session.partnerId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 

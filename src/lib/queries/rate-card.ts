@@ -5,6 +5,12 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceMatchesAnyTrade } from "@/lib/trade-match";
+import {
+  parsePricingAddons,
+  parsePricingPresets,
+  type ServicePricingAddon,
+  type ServicePricingPreset,
+} from "@/lib/catalog-pricing";
 
 interface CatalogRow {
   id: string;
@@ -13,6 +19,8 @@ interface CatalogRow {
   fixed_price: number | null;
   hourly_rate: number | null;
   default_hours: number | null;
+  pricing_presets: unknown;
+  pricing_addons: unknown;
 }
 interface PSPRow {
   id: string;
@@ -28,13 +36,15 @@ export interface ServicePrice {
   catalogServiceId: string;
   name: string;
   mode: "fixed" | "hourly";
-  standardFixed: number;
-  standardHourly: number;
+  standardFixed: number; // = service_catalog.fixed_price — our customer sell price = the partner's ceiling
+  standardHourly: number; // = service_catalog.hourly_rate — hourly sell ceiling
   standardHours: number;
   useStandard: boolean;
   fixedPartnerCost: number | null;
   hourlyPartnerRate: number | null;
   defaultHours: number | null;
+  bands: ServicePricingPreset[]; // pricing_presets — shown read-only
+  addons: ServicePricingAddon[]; // pricing_addons — shown read-only
 }
 
 /** service_catalog ids whose name matches one of the partner's trades (fuzzy: profession ⇄ activity). */
@@ -51,7 +61,7 @@ export async function fetchRateCard(supabase: SupabaseClient, partnerId: string,
 
   const { data: cats } = await supabase
     .from("service_catalog")
-    .select("id,name,pricing_mode,fixed_price,hourly_rate,default_hours")
+    .select("id,name,pricing_mode,fixed_price,hourly_rate,default_hours,pricing_presets,pricing_addons")
     .is("deleted_at", null)
     .eq("is_active", true);
   const matching = ((cats ?? []) as CatalogRow[]).filter((c) => serviceMatchesAnyTrade(c.name ?? "", trades));
@@ -78,6 +88,8 @@ export async function fetchRateCard(supabase: SupabaseClient, partnerId: string,
         fixedPartnerCost: p?.fixed_partner_cost ?? null,
         hourlyPartnerRate: p?.hourly_partner_rate ?? null,
         defaultHours: p?.default_hours ?? null,
+        bands: parsePricingPresets(c.pricing_presets),
+        addons: parsePricingAddons(c.pricing_addons),
       } satisfies ServicePrice;
     })
     .sort((a, b) => a.name.localeCompare(b.name));
