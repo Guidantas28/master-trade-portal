@@ -1,56 +1,110 @@
-// POST /api/contracts/sign  { contractVersionId, contractType, signatureDataUrl, signerName }
-//
-// Records a partner's e-signature of a contract version (partner_contract_signatures). The
-// partner is resolved from the session; the signature image is stored inline as a PNG data URL
-// (small, self-contained). Captures IP + user-agent for UK e-signature audit. Idempotent per
-// (partner, version) via the table's unique constraint.
+// POST /api/contracts/sign — sign a single partner contract version.
 
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { createServiceClient } from "@/lib/supabase/service";
+import { getClientIp } from "@/lib/client-ip";
+import {
+  decodeSignatureBase64,
+  fetchCompanyName,
+  signPartnerContract,
+} from "@/lib/partner-contract-sign";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 30;
+
+type SignBody = {
+  contractVersionId?: string;
+  contractType?: string;
+  signatureDataUrl?: string;
+  signatureImageBase64?: string;
+  signerName?: string;
+  deviceInfo?: string;
+};
 
 export async function POST(req: Request) {
   const session = await getPartnerSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  let body: { contractVersionId?: string; contractType?: string; signatureDataUrl?: string; signerName?: string };
+  let body: SignBody;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
-  const { contractVersionId, contractType, signatureDataUrl, signerName } = body;
-  if (!contractVersionId || !contractType || !signatureDataUrl || !signerName?.trim()) {
-    return NextResponse.json({ error: "contractVersionId, contractType, signatureDataUrl and signerName are required" }, { status: 400 });
-  }
-  if (!signatureDataUrl.startsWith("data:image/")) {
-    return NextResponse.json({ error: "Invalid signature image" }, { status: 400 });
+
+  const { contractVersionId, contractType, signerName } = body;
+  const cleanBase64 = decodeSignatureBase64(body.signatureImageBase64 || body.signatureDataUrl);
+  if (!contractVersionId || !contractType || !cleanBase64 || !signerName?.trim()) {
+    return NextResponse.json(
+      { error: "contractVersionId, contractType, signature image and signerName are required" },
+      { status: 400 },
+    );
   }
 
   const svc = createServiceClient();
 
-  // Already signed this version? treat as success.
-  const { data: existing } = await svc
-    .from("partner_contract_signatures")
-    .select("id")
-    .eq("partner_id", session.partnerId)
-    .eq("contract_version_id", contractVersionId)
+  const { data: version, error: versionErr } = await svc
+    .from("contract_versions")
+    .select("id, contract_type, version, title, body_html")
+    .eq("id", contractVersionId)
+    .eq("is_active", true)
     .maybeSingle();
-  if (existing) return NextResponse.json({ signed: true, already: true });
+  if (versionErr || !version) {
+    return NextResponse.json({ error: "Contract version not found or inactive" }, { status: 404 });
+  }
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
-  const ua = req.headers.get("user-agent") || null;
+  const cv = version as {
+    id: string;
+    contract_type: string;
+    version: string;
+    title: string;
+    body_html: string;
+  };
+  if (cv.contract_type !== contractType) {
+    return NextResponse.json({ error: "Contract type mismatch" }, { status: 400 });
+  }
 
-  const { error } = await svc.from("partner_contract_signatures").insert({
-    partner_id: session.partnerId,
-    contract_version_id: contractVersionId,
-    contract_type: contractType,
-    signer_full_name: signerName.trim(),
-    signer_email: session.email ?? "",
-    signature_image_url: signatureDataUrl,
-    signer_ip: ip,
-    device_info: ua,
-  });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ signed: true });
+  const signerIp = getClientIp(req);
+  const deviceInfo = body.deviceInfo?.trim() || req.headers.get("user-agent") || null;
+  const companyName = await fetchCompanyName(svc);
+
+  try {
+    const result = await signPartnerContract({
+      svc,
+      partnerId: session.partnerId,
+      userId: session.userId,
+      signerEmail: session.email ?? "",
+      signerName: signerName.trim(),
+      contractVersion: cv,
+      cleanSignatureBase64: cleanBase64,
+      signerIp,
+      deviceInfo,
+      companyName,
+    });
+
+    return NextResponse.json({
+      signed: true,
+      already: result.alreadySigned ?? false,
+      signatureId: result.signatureId,
+      signaturePdfUrl: result.signaturePdfUrl,
+      signedAt: result.signedAt,
+      signerIp: result.signerIp,
+      audit: {
+        signerFullName: signerName.trim(),
+        signerEmail: session.email,
+        signedAt: result.signedAt,
+        signerIp: result.signerIp,
+        deviceInfo,
+        contractVersionId,
+        contractType,
+      },
+    });
+  } catch (err) {
+    console.error("[contracts/sign]", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to sign contract" },
+      { status: 500 },
+    );
+  }
 }

@@ -44,9 +44,20 @@ export async function POST(req: Request) {
   // Idempotent on the (lead_id, partner_id) unique constraint — upsert+ignoreDuplicates so two
   // concurrent "Contact" clicks can't 500 on a race. offered_by is FK → public.profiles(id)
   // (staff); a partner self-contacting isn't a profile, so leave it null.
-  const { error } = await svc
+  let upsertPayload: Record<string, unknown> = {
+    lead_id: leadId,
+    partner_id: session.partnerId,
+    pipeline_status: "contacted",
+  };
+  let { error } = await svc
     .from("lead_partner_offers")
-    .upsert({ lead_id: leadId, partner_id: session.partnerId }, { onConflict: "lead_id,partner_id", ignoreDuplicates: true });
+    .upsert(upsertPayload, { onConflict: "lead_id,partner_id", ignoreDuplicates: true });
+
+  if (error && /pipeline_status/.test(error.message)) {
+    ({ error } = await svc
+      .from("lead_partner_offers")
+      .upsert({ lead_id: leadId, partner_id: session.partnerId }, { onConflict: "lead_id,partner_id", ignoreDuplicates: true }));
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Reveal the customer's contact details now that this partner has reached out.

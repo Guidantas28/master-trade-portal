@@ -4,20 +4,35 @@
 // Several pages (Trades, Service area, Availability, Rate card, Documents) are reused
 // by the onboarding flow, so they're exported.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { T } from "@/lib/tokens";
-import { Avatar, Badge, Button, Card, Icon, Input, Modal, Toggle } from "@/components/ui/primitives";
+import { Avatar, Badge, Button, Card, Field, Icon, Input, Modal, Toggle } from "@/components/ui/primitives";
+import { StripeMark } from "@/components/brand/stripe-mark";
 import { ServiceAreaMap } from "@/components/ui/service-area-map";
 import { SignaturePad } from "@/components/ui/signature-pad";
 import { useToast } from "@/components/ui/toast";
+import { PartnerRatingCard } from "@/components/ui/partner-rating";
 import { usePartner } from "@/components/partner-context";
+import { usePartnerRating } from "@/hooks/use-partner-rating";
 import { createClient } from "@/lib/supabase/client";
 import { formatGBPdec } from "@/lib/format";
+import {
+  exampleJobDate,
+  fmtDay,
+  fmtPayFriday,
+  fmtRange,
+  getYourNextPayment,
+  upcomingPayments,
+} from "@/lib/payment-schedule";
+import { SERVICE_CATEGORY_ORDER, serviceCategory } from "@/lib/service-category";
 import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
+import { hydrateContractHtml } from "@/lib/contract-branding";
 import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
 import { fetchRateCard, saveRateCard, type ServicePrice } from "@/lib/queries/rate-card";
+import { formatCatalogPartnerPay } from "@/lib/catalog-partner-pay";
+import { servicePricingLabel } from "@/lib/pricing-mode-labels";
 import { useRegisterOnboardingSave, useIsOnboarding } from "@/components/onboarding-save";
 import {
   fetchPartnerSettings,
@@ -188,6 +203,7 @@ function ToggleRow({ on, onChange, label, hint }: { on: boolean; onChange: (v: b
 // bio and years_experience (migration 204). DOB/company number/VAT number have no column yet.
 function ProfilePage() {
   const partner = usePartner();
+  const { rating, complaintCount, pointsLost, topComplaints, loaded: ratingLoaded } = usePartnerRating(partner.rating);
   const toast = useToast();
   const initial = {
     firstName: partner.firstName,
@@ -230,11 +246,14 @@ function ProfilePage() {
   return (
     <>
       <SettingsHeader title="Profile" subtitle="What customers see on your job reports." />
+      {ratingLoaded && (
+        <PartnerRatingCard rating={rating} complaintCount={complaintCount} pointsLost={pointsLost} topComplaints={topComplaints} />
+      )}
       <PageCard title="About you">
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
           <Avatar initials={partner.initials} size={72} bg={T.navy} />
           <div>
-            <Button variant="secondary" size="sm" icon="camera">Upload photo</Button>
+            <Button variant="secondary" size="sm" icon="camera">Upload Logo</Button>
             <div style={{ fontSize: 11.5, color: T.mute, marginTop: 6 }}>PNG or JPG, 800×800 minimum</div>
           </div>
         </div>
@@ -325,8 +344,7 @@ export function TradesPage() {
       const ids = new Set<string>();
       if (p?.catalog_service_ids?.length) {
         for (const id of p.catalog_service_ids) if (list.some((c) => c.id === id)) ids.add(id);
-      }
-      if (ids.size === 0 && p?.trades?.length) {
+      } else if (!inOnboarding && p?.trades?.length) {
         for (const c of list) if (p.trades.includes(c.name)) ids.add(c.id);
       }
       setEnabledIds(ids);
@@ -337,7 +355,7 @@ export function TradesPage() {
     return () => {
       alive = false;
     };
-  }, [partner.id]);
+  }, [partner.id, inOnboarding]);
 
   const toggle = (id: string) => {
     setDirty(true);
@@ -354,6 +372,37 @@ export function TradesPage() {
     setDirty(true);
     if (!enabledIds.has(id)) setEnabledIds(new Set(enabledIds).add(id));
     setPrimaryId(id);
+  };
+
+  const renderTradeCard = (c: CatalogTrade) => {
+    const on = enabledIds.has(c.id);
+    const isPrimary = on && c.id === primaryId;
+    return (
+      <div
+        key={c.id}
+        style={{
+          padding: 14,
+          borderRadius: 10,
+          border: `1px solid ${isPrimary ? T.coral : on ? T.line : T.line}`,
+          background: on ? T.white : T.paper,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 500, color: on ? T.ink : T.slate, flex: 1 }}>{c.name}</span>
+          {isPrimary && <Badge tone="coral" size="sm">Primary</Badge>}
+          <Toggle on={on} onChange={() => toggle(c.id)} />
+        </div>
+        {on && !isPrimary && (
+          <button
+            type="button"
+            onClick={() => makePrimary(c.id)}
+            style={{ marginTop: 10, padding: 0, background: "transparent", border: "none", color: T.coral, fontFamily: T.sans, fontSize: 12, fontWeight: 500, cursor: "pointer" }}
+          >
+            Make primary
+          </button>
+        )}
+      </div>
+    );
   };
 
   const save = async (): Promise<boolean> => {
@@ -396,8 +445,10 @@ export function TradesPage() {
 
   return (
     <>
-      <SettingsHeader title="Trades & skills" subtitle="The services you offer. Pick the ones you do and set one as your primary — we only send work matching your enabled trades." />
-      <PageCard title="Services we offer">
+      {!inOnboarding && (
+        <SettingsHeader title="Trades & skills" subtitle="The services you offer. Pick the ones you do and set one as your primary — we only send work matching your enabled trades." />
+      )}
+      <PageCard title="Your services" subtitle="All off by default — turn on only what you offer. Pick one as your primary trade.">
         {loading ? (
           <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
             <Icon name="loader" size={14} color={T.mute} /> Loading services…
@@ -405,39 +456,27 @@ export function TradesPage() {
         ) : catalog.length === 0 ? (
           <div style={{ fontSize: 13, color: T.mute }}>No services published yet.</div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
-            {catalog.map((c) => {
-              const on = enabledIds.has(c.id);
-              const isPrimary = on && c.id === primaryId;
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            {SERVICE_CATEGORY_ORDER.map((cat) => {
+              const catItems = catalog.filter((c) => serviceCategory(c.name) === cat);
+              if (catItems.length === 0) return null;
               return (
-                <div
-                  key={c.id}
-                  style={{ padding: 14, borderRadius: 10, border: `1px solid ${isPrimary ? T.coral : T.line}`, background: on ? T.white : T.paper, opacity: on ? 1 : 0.85 }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 13.5, fontWeight: 500, color: T.ink, flex: 1 }}>{c.name}</span>
-                    {isPrimary && <Badge tone="coral" size="sm">Primary</Badge>}
-                    <Toggle on={on} onChange={() => toggle(c.id)} />
-                  </div>
-                  {on && !isPrimary && (
-                    <button
-                      onClick={() => makePrimary(c.id)}
-                      style={{ marginTop: 10, padding: 0, background: "transparent", border: "none", color: T.coral, fontFamily: T.sans, fontSize: 12, fontWeight: 500, cursor: "pointer" }}
-                    >
-                      Make primary
-                    </button>
-                  )}
+                <div key={cat}>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: T.navy, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 }}>{cat}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>{catItems.map(renderTradeCard)}</div>
                 </div>
               );
             })}
           </div>
         )}
       </PageCard>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving || loading}>
-          {saving ? "Saving…" : "Save trades"}
-        </Button>
-      </div>
+      {!inOnboarding && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving || loading}>
+            {saving ? "Saving…" : "Save trades"}
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -448,12 +487,23 @@ export function TradesPage() {
 export function RatesPage() {
   const partner = usePartner();
   const toast = useToast();
+  const inOnboarding = useIsOnboarding();
   const [rows, setRows] = useState<ServicePrice[]>([]);
   const [initial, setInitial] = useState<ServicePrice[]>([]);
   const [tradeCount, setTradeCount] = useState<number>(partner.trades.length);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [extrasOpen, setExtrasOpen] = useState<Set<string>>(new Set());
+
+  const toggleExtras = (catalogServiceId: string) => {
+    setExtrasOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(catalogServiceId)) next.delete(catalogServiceId);
+      else next.add(catalogServiceId);
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -467,9 +517,10 @@ export function RatesPage() {
         const { data: prow } = await supabase.from("partners").select("trades").eq("id", partner.id).maybeSingle();
         const trades = ((prow as { trades?: string[] | null } | null)?.trades ?? partner.trades) ?? [];
         const data = await fetchRateCard(supabase, partner.id, trades);
+        const normalized = inOnboarding ? data.map((r) => ({ ...r, useStandard: true })) : data;
         if (!cancelled) {
-          setRows(data);
-          setInitial(data);
+          setRows(normalized);
+          setInitial(normalized);
           setTradeCount(trades.length);
         }
       } catch (e) {
@@ -482,23 +533,22 @@ export function RatesPage() {
       cancelled = true;
     };
     // partner.trades drives which services show — re-fetch when they change
-  }, [partner.id, partner.trades]);
+  }, [partner.id, partner.trades, inOnboarding]);
 
   const dirty = JSON.stringify(rows) !== JSON.stringify(initial);
   const update = (catalogServiceId: string, patch: Partial<ServicePrice>) =>
     setRows((prev) => prev.map((r) => (r.catalogServiceId === catalogServiceId ? { ...r, ...patch } : r)));
   const num = (v: string): number | null => (v.trim() === "" ? null : Number(v.replace(/[^0-9.]/g, "")) || 0);
-  // The partner can match or undercut our customer price, but never exceed it.
+  // Partner can undercut catalog pay but never exceed the catalog ceiling.
   const clampTo = (v: number | null, ceiling: number): number | null => (v == null ? null : Math.min(Math.max(0, v), ceiling));
 
   const save = async () => {
     setSaving(true);
     try {
-      // Defence-in-depth: clamp every override to its sell ceiling before persisting.
       const clamped = rows.map((r) => ({
         ...r,
-        fixedPartnerCost: clampTo(r.fixedPartnerCost, r.standardFixed),
-        hourlyPartnerRate: clampTo(r.hourlyPartnerRate, r.standardHourly),
+        fixedPartnerCost: clampTo(r.fixedPartnerCost, r.standardPayFixed),
+        hourlyPartnerRate: clampTo(r.hourlyPartnerRate, r.standardPayHourly),
       }));
       await saveRateCard(createClient(), partner.id, clamped);
       setInitial(clamped);
@@ -513,9 +563,116 @@ export function RatesPage() {
 
   useRegisterOnboardingSave(save); // Continue saves the rate card automatically
 
+  const renderServiceRow = (r: ServicePrice) => {
+    const pay = formatCatalogPartnerPay(r.mode, r.standardPayFixed, r.standardHours, r.name, formatGBPdec);
+    const payCeiling = r.mode === "hourly" ? r.standardPayHourly : r.standardPayFixed;
+    const current = r.mode === "hourly" ? r.hourlyPartnerRate : r.fixedPartnerCost;
+    const aboveStandard = !r.useStandard && current != null && current > payCeiling;
+
+    return (
+      <div key={r.catalogServiceId} style={{ padding: 12, border: `1px solid ${T.line}`, borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{r.name}</div>
+            <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
+              {servicePricingLabel(r.mode, r.name)} · <span className="fx-mono">{pay}</span>
+            </div>
+          </div>
+          <span style={{ fontSize: 12, color: T.slate }}>Use standard</span>
+          <Toggle on={r.useStandard} onChange={(v) => update(r.catalogServiceId, { useStandard: v })} />
+        </div>
+        {!r.useStandard && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 2 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              {r.mode === "hourly" ? (
+                <>
+                  <Input
+                    value={r.hourlyPartnerRate != null ? String(r.hourlyPartnerRate) : ""}
+                    onChange={(v) => update(r.catalogServiceId, { hourlyPartnerRate: num(v) })}
+                    prefix="£"
+                    suffix="/hr"
+                    placeholder={String(r.standardPayHourly)}
+                    style={{ width: 160 }}
+                  />
+                  <Input
+                    value={r.defaultHours != null ? String(r.defaultHours) : ""}
+                    onChange={(v) => update(r.catalogServiceId, { defaultHours: num(v) })}
+                    suffix="hrs"
+                    placeholder={String(r.standardHours)}
+                    style={{ width: 120 }}
+                  />
+                </>
+              ) : (
+                <Input
+                  value={r.fixedPartnerCost != null ? String(r.fixedPartnerCost) : ""}
+                  onChange={(v) => update(r.catalogServiceId, { fixedPartnerCost: num(v) })}
+                  prefix="£"
+                  placeholder={String(r.standardPayFixed)}
+                  style={{ width: 180 }}
+                />
+              )}
+            </div>
+            {aboveStandard && (
+              <div style={{ fontSize: 11, color: T.coral, lineHeight: 1.45 }}>
+                That&apos;s above the catalog standard pay of{" "}
+                <span className="fx-mono">{r.mode === "hourly" ? `${formatGBPdec(r.standardPayHourly)}/hr` : formatGBPdec(r.standardPayFixed)}</span>
+                {" "}— we can&apos;t match pre-paid jobs at that rate right now.
+              </div>
+            )}
+          </div>
+        )}
+        {(r.bands.length > 0 || r.addons.length > 0) && (
+          <div style={{ paddingTop: 8, borderTop: `1px dashed ${T.line}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: T.slate, fontFamily: T.mono, letterSpacing: 0.3 }}>+ EXTRAS</span>
+              <button
+                type="button"
+                onClick={() => toggleExtras(r.catalogServiceId)}
+                title={extrasOpen.has(r.catalogServiceId) ? "Hide standard prices" : "View standard band and add-on prices"}
+                aria-expanded={extrasOpen.has(r.catalogServiceId)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 22,
+                  height: 22,
+                  padding: 0,
+                  border: `1px solid ${T.line}`,
+                  borderRadius: 9999,
+                  background: extrasOpen.has(r.catalogServiceId) ? T.coralTint : T.white,
+                  cursor: "pointer",
+                }}
+              >
+                <Icon name="info" size={13} color={extrasOpen.has(r.catalogServiceId) ? T.coral : T.mute} />
+              </button>
+            </div>
+            {extrasOpen.has(r.catalogServiceId) && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {r.bands.map((b) => (
+                  <span key={`b-${b.id}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", background: T.paper2, color: T.slate, borderRadius: 6, fontSize: 11 }}>
+                    <Icon name="layers" size={11} color={T.mute} />
+                    {b.label}
+                    {b.partner_cost != null && <span className="fx-mono">· {formatGBPdec(b.partner_cost)}</span>}
+                  </span>
+                ))}
+                {r.addons.map((a) => (
+                  <span key={`a-${a.id}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", background: T.paper2, color: T.slate, borderRadius: 6, fontSize: 11 }}>
+                    <Icon name="plus" size={11} color={T.mute} />
+                    {a.label}
+                    {a.partner_cost != null && <span className="fx-mono">· {formatGBPdec(a.partner_cost)}</span>}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
-      <SettingsHeader title="Rate card" subtitle="Your cost per service. Use the Fixfy standard or set your own — customers see totals only." />
+      {!inOnboarding && <SettingsHeader title="Rate card" subtitle="What Fixfy pays you per service — from the catalog standard or your own rate below the ceiling." />}
       {loading ? (
         <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="loader" size={14} color={T.mute} /> Loading rate card…
@@ -532,90 +689,76 @@ export function RatesPage() {
         </PageCard>
       ) : (
         <>
-          <PageCard title="Your services" subtitle="Services for your trades. Toggle off &quot;standard&quot; to charge your own rate.">
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {rows.map((r) => {
-                const standard = r.mode === "hourly" ? `${formatGBPdec(r.standardHourly)}/hr · ${r.standardHours}h` : formatGBPdec(r.standardFixed);
+          <PageCard title="Your services" subtitle="Standard pay comes from the Fixfy catalog. Toggle off to set your own rate — it can't go above the catalog ceiling.">
+            <div
+              style={{
+                marginBottom: 16,
+                padding: "12px 14px",
+                borderRadius: 10,
+                background: T.green50,
+                border: `1px solid rgba(14, 138, 95, 0.22)`,
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 12,
+              }}
+            >
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: T.white, color: T.green, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <Icon name="trending-up" size={16} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: T.green }}>Using our standard price</div>
+                <div style={{ fontSize: 12.5, color: T.slate, marginTop: 3, lineHeight: 1.45 }}>
+                  Your chance of being chosen for pre-paid jobs is <b style={{ color: T.ink }}>76% higher</b>.
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+              {SERVICE_CATEGORY_ORDER.map((cat) => {
+                const catRows = rows.filter((r) => serviceCategory(r.name) === cat);
+                if (catRows.length === 0) return null;
                 return (
-                  <div key={r.catalogServiceId} style={{ padding: 12, border: `1px solid ${T.line}`, borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{r.name}</div>
-                        <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
-                          {r.mode === "hourly" ? "Hourly" : "Fixed"} · standard <span className="fx-mono">{standard}</span>
+                  <div key={cat}>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: T.navy, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 }}>{cat}</div>
+                    {cat === "Trades" && (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          padding: "12px 14px",
+                          borderRadius: 10,
+                          background: T.paper2,
+                          border: `1px solid ${T.line}`,
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 12,
+                        }}
+                      >
+                        <div style={{ width: 32, height: 32, borderRadius: 8, background: T.white, color: T.navy, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <Icon name="clock" size={16} />
                         </div>
-                      </div>
-                      <span style={{ fontSize: 12, color: T.slate }}>Use standard</span>
-                      <Toggle on={r.useStandard} onChange={(v) => update(r.catalogServiceId, { useStandard: v })} />
-                    </div>
-                    {!r.useStandard && (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 2 }}>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          {r.mode === "hourly" ? (
-                            <>
-                              <Input
-                                value={r.hourlyPartnerRate != null ? String(r.hourlyPartnerRate) : ""}
-                                onChange={(v) => update(r.catalogServiceId, { hourlyPartnerRate: clampTo(num(v), r.standardHourly) })}
-                                prefix="£"
-                                suffix="/hr"
-                                placeholder={String(r.standardHourly)}
-                                style={{ width: 160 }}
-                              />
-                              <Input
-                                value={r.defaultHours != null ? String(r.defaultHours) : ""}
-                                onChange={(v) => update(r.catalogServiceId, { defaultHours: num(v) })}
-                                suffix="hrs"
-                                placeholder={String(r.standardHours)}
-                                style={{ width: 120 }}
-                              />
-                            </>
-                          ) : (
-                            <Input
-                              value={r.fixedPartnerCost != null ? String(r.fixedPartnerCost) : ""}
-                              onChange={(v) => update(r.catalogServiceId, { fixedPartnerCost: clampTo(num(v), r.standardFixed) })}
-                              prefix="£"
-                              placeholder={String(r.standardFixed)}
-                              style={{ width: 180 }}
-                            />
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11, color: T.mute }}>
-                          Max <span className="fx-mono">{r.mode === "hourly" ? `${formatGBPdec(r.standardHourly)}/hr` : formatGBPdec(r.standardFixed)}</span> — our customer price. Match it or go lower; you can&apos;t charge above it.
+                        <div>
+                          <div style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>Call Out = 1-3 Hour Visit</div>
+                          <div style={{ fontSize: 12.5, color: T.slate, marginTop: 3, lineHeight: 1.45 }}>
+                            If you can finish the job within 1-3 hours, good. If it needs longer, put together a quote and send it to us and we will get it approved as soon as possible.
+                          </div>
                         </div>
                       </div>
                     )}
-                    {(r.bands.length > 0 || r.addons.length > 0) && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingTop: 8, borderTop: `1px dashed ${T.line}` }}>
-                        <span style={{ fontSize: 10.5, color: T.mute, alignSelf: "center", marginRight: 2, letterSpacing: 0.3 }}>ON SOME JOBS:</span>
-                        {r.bands.map((b) => (
-                          <span key={`b-${b.id}`} title="Pricing band — applies on jobs that use it" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", background: T.paper2, color: T.slate, borderRadius: 6, fontSize: 11 }}>
-                            <Icon name="layers" size={11} color={T.mute} />
-                            {b.label}
-                            {b.fixed_price != null && <span className="fx-mono">· {formatGBPdec(b.fixed_price)}</span>}
-                          </span>
-                        ))}
-                        {r.addons.map((a) => (
-                          <span key={`a-${a.id}`} title="Add-on — applies on jobs that include it" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", background: T.paper2, color: T.slate, borderRadius: 6, fontSize: 11 }}>
-                            <Icon name="plus" size={11} color={T.mute} />
-                            {a.label}
-                            <span className="fx-mono">· {formatGBPdec(a.fixed_price)}</span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{catRows.map(renderServiceRow)}</div>
                   </div>
                 );
               })}
             </div>
           </PageCard>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Button variant="ghost" onClick={() => setRows(initial)} disabled={!dirty || saving}>
-              Cancel
-            </Button>
-            <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
-              {saving ? "Saving…" : "Save rate card"}
-            </Button>
-          </div>
+          {!inOnboarding && (
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <Button variant="ghost" onClick={() => setRows(initial)} disabled={!dirty || saving}>
+                Cancel
+              </Button>
+              <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+                {saving ? "Saving…" : "Save rate card"}
+              </Button>
+            </div>
+          )}
         </>
       )}
     </>
@@ -626,6 +769,7 @@ export function RatesPage() {
 export function AvailabilityPage() {
   const partner = usePartner();
   const toast = useToast();
+  const inOnboarding = useIsOnboarding();
   const [av, setAv] = useState<Availability | null>(null);
   const [initial, setInitial] = useState<Availability | null>(null);
   const [loading, setLoading] = useState(true);
@@ -731,12 +875,14 @@ export function AvailabilityPage() {
         </Row>
       </PageCard>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="ghost" onClick={() => setAv(initial)} disabled={!dirty || saving}>Cancel</Button>
-        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
-          {saving ? "Saving…" : "Save availability"}
-        </Button>
-      </div>
+      {!inOnboarding && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Button variant="ghost" onClick={() => setAv(initial)} disabled={!dirty || saving}>Cancel</Button>
+          <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save availability"}
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -747,6 +893,7 @@ type CoverageMode = "radius" | "postcodes";
 export function ServiceAreaPage() {
   const partner = usePartner();
   const toast = useToast();
+  const inOnboarding = useIsOnboarding();
   const [mode, setMode] = useState<CoverageMode>("radius");
   const [postcode, setPostcode] = useState(partner.postcode);
   const [radius, setRadius] = useState(partner.radiusMiles || 10);
@@ -837,7 +984,7 @@ export function ServiceAreaPage() {
 
   return (
     <>
-      <SettingsHeader title="Service area" subtitle="Where you work. Cover by distance from a base postcode, or list the exact postcode areas you take." />
+      {!inOnboarding && <SettingsHeader title="Service area" subtitle="Where you work. Cover by distance from a base postcode, or list the exact postcode areas you take." />}
       <PageCard title="Coverage">
         {/* Mode toggle */}
         <div style={{ display: "inline-flex", gap: 6, background: T.paper2, padding: 3, borderRadius: 10, marginBottom: 14 }}>
@@ -923,11 +1070,13 @@ export function ServiceAreaPage() {
           </div>
         )}
       </PageCard>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
-          {saving ? "Saving…" : "Save service area"}
-        </Button>
-      </div>
+      {!inOnboarding && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save service area"}
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -1083,14 +1232,19 @@ function daysLeft(iso: string | null): number {
 const PRO_FEATURES = [
   "0% commission on every job",
   "Unlimited leads and jobs",
-  "Card-to-bank payouts (Net-7)",
+  "Card-to-bank payouts",
   "Self-bill PDFs auto-generated",
   "Customer report templates",
   "24/7 emergency dispatch",
 ];
 
+function isEmploymentContract(c: { type: string; title: string }): boolean {
+  return /employment/i.test(c.type) || /employment/i.test(c.title);
+}
+
 export function BillingPage() {
   const partner = usePartner();
+  const inOnboarding = useIsOnboarding();
   // Best-effort read of the subscription columns (migration 196). If 196 isn't applied yet the
   // query errors on the missing columns — we swallow it and fall back to the "start trial" state,
   // so this never breaks the page (and stays out of the critical auth select).
@@ -1140,6 +1294,31 @@ export function BillingPage() {
         ? `Trial ends ${fmtDate(sub.trial_ends_at)}.`
         : "Trial in progress."
       : "Start your Fixfy Pro plan to keep receiving work.";
+
+  if (inOnboarding) {
+    return (
+      <Card style={{ padding: 0, background: T.navy, color: T.white, borderColor: T.navy }}>
+        <div style={{ padding: "22px 24px" }}>
+          <Badge tone="coral" size="sm">FREE TRIAL · 30 DAYS</Badge>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 10, letterSpacing: -0.4 }}>
+            Fixfy Pro <span style={{ color: T.coral }}>· £99</span>/month after trial
+          </div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.82)", marginTop: 10, lineHeight: 1.55, maxWidth: 520 }}>
+            Your first 30 days are completely free — no charge today, no card required. Bill as much as you want during your trial.
+            After 30 days it&apos;s £99/month. Your risk is zero.
+          </div>
+          <ul style={{ margin: "18px 0 0", padding: 0, listStyle: "none", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {PRO_FEATURES.map((f) => (
+              <li key={f} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "rgba(255,255,255,0.85)" }}>
+                <Icon name="check" size={13} color={T.coral} />
+                {f}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <>
@@ -1207,23 +1386,189 @@ interface PayoutStatus {
   connected: boolean;
   payoutsEnabled: boolean;
   detailsSubmitted: boolean;
+  method?: "manual" | "stripe" | null;
+  accountHolder?: string;
 }
 
-function PayoutsCard() {
+export function PaymentHowItWorksCard() {
+  const next = getYourNextPayment();
+  const schedule = upcomingPayments(new Date(), 4);
+  const exampleDate = exampleJobDate(next);
+  const exampleAmount = 200;
+  const nextAfter = schedule[1];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Simple rule */}
+      <PageCard title="How you get paid">
+        <div
+          style={{
+            padding: "14px 16px",
+            borderRadius: 10,
+            background: T.navy,
+            color: T.white,
+            marginBottom: 14,
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, color: T.coral, marginBottom: 6 }}>SIMPLE RULE</div>
+          <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>We pay every 2 weeks, always on Friday.</div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)", marginTop: 8, lineHeight: 1.55 }}>
+            Each payment covers 2 full weeks: Monday → Sunday + Monday → Sunday.
+          </div>
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: T.navy, marginBottom: 8 }}>A job is included when:</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {["The job is completed", "The job is approved", "The job start date is inside that period"].map((line) => (
+            <div key={line} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13.5, color: T.ink }}>
+              <span style={{ width: 22, height: 22, borderRadius: 9999, background: T.green50, color: T.green, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <Icon name="check" size={12} />
+              </span>
+              {line}
+            </div>
+          ))}
+        </div>
+      </PageCard>
+
+      {/* Your next payment — hero */}
+      <Card style={{ padding: 0, overflow: "hidden", borderColor: T.coral }}>
+        <div style={{ padding: "16px 18px", background: T.coralTint, borderBottom: `1px solid ${T.line}` }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, color: T.coral }}>YOUR NEXT PAYMENT</div>
+        </div>
+        <div style={{ padding: "18px 20px" }}>
+          <div style={{ fontSize: 28, fontWeight: 600, color: T.navy, letterSpacing: -0.5 }}>{fmtPayFriday(next.payFriday)}</div>
+          <div style={{ fontSize: 13, color: T.slate, marginTop: 6, lineHeight: 1.5 }}>This payment covers jobs from:</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+            {[
+              { label: "Week 1", range: next.week1 },
+              { label: "Week 2", range: next.week2 },
+            ].map(({ label, range }) => (
+              <div key={label} style={{ padding: "12px 14px", borderRadius: 10, background: T.paper, border: `1px solid ${T.line}` }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: T.coral, letterSpacing: 0.4, marginBottom: 6 }}>{label}</div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{fmtDay(range.start)} → {fmtDay(range.end)}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: T.green50, fontSize: 12.5, color: T.slate, lineHeight: 1.5 }}>
+            If your job started between these dates and was approved, it will be paid on <strong style={{ color: T.ink }}>{fmtPayFriday(next.payFriday)}</strong>.
+          </div>
+        </div>
+      </Card>
+
+      {/* Schedule table */}
+      <PageCard title="Next payment dates" subtitle="Same system every 2 weeks after this.">
+        <div style={{ borderRadius: 10, border: `1px solid ${T.line}`, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", background: T.paper2, borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ padding: "10px 14px", fontSize: 11, fontWeight: 600, color: T.mute, letterSpacing: 0.4 }}>PAID ON</div>
+            <div style={{ padding: "10px 14px", fontSize: 11, fontWeight: 600, color: T.mute, letterSpacing: 0.4 }}>WORK COVERED</div>
+          </div>
+          {schedule.map((row, i) => (
+            <div
+              key={i}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1.4fr",
+                borderBottom: i < schedule.length - 1 ? `1px solid ${T.line}` : "none",
+                background: i === 0 ? T.coralTint : T.white,
+              }}
+            >
+              <div style={{ padding: "11px 14px", fontSize: 13, fontWeight: i === 0 ? 600 : 500, color: T.ink }}>{fmtPayFriday(row.payFriday)}</div>
+              <div style={{ padding: "11px 14px", fontSize: 13, fontFamily: T.mono, color: T.slate }}>{fmtRange(row.week1.start, row.week2.end)}</div>
+            </div>
+          ))}
+        </div>
+      </PageCard>
+
+      {/* Example */}
+      <PageCard title="Easy example">
+        <div style={{ padding: "16px 18px", borderRadius: 10, background: T.paper, border: `1px solid ${T.line}` }}>
+          <p style={{ fontSize: 14, color: T.ink, lineHeight: 1.65, margin: "0 0 14px" }}>
+            You finish a <span className="fx-mono" style={{ fontWeight: 700, color: T.coral }}>{formatGBPdec(exampleAmount)}</span> job on{" "}
+            <strong>{fmtDay(exampleDate)}</strong>.
+          </p>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.navy, marginBottom: 8 }}>The job:</div>
+          <ul style={{ margin: "0 0 14px", paddingLeft: 18, fontSize: 13.5, color: T.slate, lineHeight: 1.7 }}>
+            <li>is completed</li>
+            <li>gets approved</li>
+            <li>has a start date between {fmtRange(next.week1.start, next.week2.end)}</li>
+          </ul>
+          <div style={{ padding: "12px 14px", borderRadius: 8, background: T.green50, border: `1px solid rgba(14,138,95,0.2)` }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.green, marginBottom: 4 }}>RESULT</div>
+            <div style={{ fontSize: 14, color: T.ink, lineHeight: 1.55 }}>
+              You get paid on <strong>{fmtPayFriday(next.payFriday)}</strong>.
+            </div>
+          </div>
+          {nextAfter && (
+            <div style={{ marginTop: 12, fontSize: 12.5, color: T.mute, lineHeight: 1.5 }}>
+              If the job starts after <strong style={{ color: T.slate }}>{fmtDay(next.week2.end)}</strong>, it moves to the next payment on{" "}
+              <strong style={{ color: T.ink }}>{fmtPayFriday(nextAfter.payFriday)}</strong>.
+            </div>
+          )}
+        </div>
+      </PageCard>
+
+      {/* Important */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 12,
+          padding: "14px 16px",
+          borderRadius: 10,
+          background: T.paper,
+          border: `1px solid ${T.line}`,
+        }}
+      >
+        <Icon name="info" size={18} color={T.navy} style={{ flexShrink: 0, marginTop: 1 }} />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.navy }}>Important</div>
+          <div style={{ fontSize: 13, color: T.slate, marginTop: 4, lineHeight: 1.55 }}>
+            We invoice the customer for you. You do not need to chase payments.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export interface PayoutsCardHandle {
+  ensureReady: () => Promise<boolean>;
+}
+
+function PayoutsCardInner({ handleRef }: { handleRef: RefObject<PayoutsCardHandle | null> }) {
   const toast = useToast();
+  const inOnboarding = useIsOnboarding();
   const [status, setStatus] = useState<PayoutStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"connect" | "manual">("manual");
+  const [accountHolder, setAccountHolder] = useState("");
+  const [sortCode, setSortCode] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [manualSaved, setManualSaved] = useState(false);
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/payouts/status");
+      const json = await res.json();
+      if (res.ok) {
+        const s = json as PayoutStatus;
+        setStatus(s);
+        if (s.method === "manual" && s.payoutsEnabled) {
+          setManualSaved(true);
+          setMode("manual");
+          if (s.accountHolder) setAccountHolder(s.accountHolder);
+        }
+      }
+    } catch {
+      /* leave null */
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/payouts/status");
-        const json = await res.json();
-        if (!cancelled && res.ok) setStatus(json as PayoutStatus);
-      } catch {
-        /* leave null */
+        await refreshStatus();
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1231,7 +1576,7 @@ function PayoutsCard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshStatus]);
 
   const connect = async () => {
     setBusy(true);
@@ -1246,13 +1591,56 @@ function PayoutsCard() {
     }
   };
 
-  const enabled = status?.payoutsEnabled;
-  const started = status?.connected && !status.payoutsEnabled;
+  const saveManual = async (opts?: { silent?: boolean }): Promise<boolean> => {
+    if (!accountHolder.trim()) {
+      toast({ text: "Enter the account holder name.", icon: "alert-triangle", tone: "coral" });
+      return false;
+    }
+    if (sortCode.replace(/\D/g, "").length !== 6) {
+      toast({ text: "Sort code must be 6 digits.", icon: "alert-triangle", tone: "coral" });
+      return false;
+    }
+    if (accountNumber.replace(/\D/g, "").length !== 8) {
+      toast({ text: "Account number must be 8 digits.", icon: "alert-triangle", tone: "coral" });
+      return false;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/payouts/bank", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountHolder: accountHolder.trim(), sortCode, accountNumber }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't save bank details");
+      setManualSaved(true);
+      await refreshStatus();
+      if (!opts?.silent) toast({ text: "Bank details saved securely with Stripe", icon: "check" });
+      return true;
+    } catch (e) {
+      toast({ text: e instanceof Error ? e.message : "Couldn't save bank details", icon: "alert-triangle", tone: "coral" });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ensureReady = useCallback(async (): Promise<boolean> => {
+    if (status?.payoutsEnabled || manualSaved) return true;
+    if (mode === "manual") return saveManual({ silent: inOnboarding });
+    toast({ text: "Connect your bank with Stripe or enter your account details to get paid.", icon: "alert-triangle", tone: "coral" });
+    return false;
+  }, [status?.payoutsEnabled, manualSaved, mode, inOnboarding, accountHolder, sortCode, accountNumber, toast]);
+
+  useImperativeHandle(handleRef, () => ({ ensureReady }), [ensureReady]);
+
+  const enabled = status?.payoutsEnabled || manualSaved;
+  const started = status?.connected && !status.payoutsEnabled && !manualSaved;
 
   return (
     <PageCard
       title="Payouts"
-      subtitle="Bank details are held securely by Stripe — Fixfy never sees them."
+      subtitle="Where you receive payment for jobs completed through the platform. Bank details are held securely by Stripe."
       action={enabled ? <Badge tone="success" icon="check">Payouts active</Badge> : started ? <Badge tone="warning">Setup incomplete</Badge> : undefined}
     >
       {loading ? (
@@ -1260,32 +1648,104 @@ function PayoutsCard() {
           <Icon name="loader" size={14} color={T.mute} /> Checking payout status…
         </div>
       ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-            <Icon name="banknote" size={18} color={T.navy} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "inline-flex", gap: 6, background: T.paper2, padding: 3, borderRadius: 10, alignSelf: "flex-start" }}>
+            {([["connect", "Connect with Stripe"], ["manual", "Enter manually"]] as const).map(([id, lbl]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMode(id)}
+                style={{
+                  padding: "7px 14px",
+                  borderRadius: 7,
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  background: mode === id ? T.white : "transparent",
+                  color: mode === id ? T.navy : T.slate,
+                  boxShadow: mode === id ? "0 1px 2px rgba(2,0,64,0.12)" : "none",
+                }}
+              >
+                {lbl}
+              </button>
+            ))}
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>
-              {enabled ? "Connected — paid by bank transfer (Net-7)" : started ? "Finish connecting your bank to get paid" : "Connect your bank to receive payouts"}
+
+          {mode === "connect" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 14, padding: 16, borderRadius: 10, border: `1px solid ${T.line}`, background: T.paper }}>
+              <div style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
+                <StripeMark width={44} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>
+                  {enabled ? "Bank connected — paid every 2 weeks on Friday" : started ? "Finish connecting your bank on Stripe" : "Connect your bank to receive payouts"}
+                </div>
+                <div style={{ fontSize: 11.5, color: T.mute, marginTop: 3 }}>Secured by Stripe Connect · trusted by millions of businesses</div>
+              </div>
+              <Button variant={enabled ? "secondary" : "primary"} icon={enabled ? "pencil" : "arrow-right"} onClick={connect} disabled={busy}>
+                {busy ? "Opening…" : enabled ? "Manage" : started ? "Finish setup" : "Connect your bank"}
+              </Button>
             </div>
-            <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>Secured by Stripe Connect.</div>
-          </div>
-          <Button variant={enabled ? "secondary" : "primary"} icon={enabled ? "pencil" : "arrow-right"} onClick={connect} disabled={busy}>
-            {busy ? "Opening…" : enabled ? "Manage" : started ? "Finish setup" : "Set up payouts"}
-          </Button>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16, borderRadius: 10, border: `1px solid ${T.line}`, background: T.white }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                <StripeMark width={40} />
+                <span style={{ fontSize: 11.5, color: T.mute }}>Details encrypted and stored with Stripe</span>
+              </div>
+              <Field label="Account holder name">
+                <Input value={accountHolder} onChange={setAccountHolder} placeholder="Full name on the account" />
+              </Field>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Field label="Sort code">
+                  <Input value={sortCode} onChange={setSortCode} placeholder="00-00-00" />
+                </Field>
+                <Field label="Account number">
+                  <Input value={accountNumber} onChange={setAccountNumber} placeholder="12345678" />
+                </Field>
+              </div>
+              {inOnboarding ? (
+                <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.45 }}>
+                  Your bank details save when you click <strong style={{ color: T.slate }}>Continue</strong>.
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <Button variant="primary" icon="check" onClick={() => void saveManual()} disabled={busy || enabled}>
+                    {busy ? "Saving…" : enabled ? "Saved" : "Save bank details"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </PageCard>
   );
 }
 
+/** Embedded in onboarding Your Details — parent owns Continue validation via ref. */
+export function PayoutsCardEmbedded({ handleRef }: { handleRef: RefObject<PayoutsCardHandle | null> }) {
+  return <PayoutsCardInner handleRef={handleRef} />;
+}
+
+export function PayoutsCard() {
+  const handleRef = useRef<PayoutsCardHandle | null>(null);
+  useRegisterOnboardingSave(async () => handleRef.current?.ensureReady() ?? false);
+  return <PayoutsCardInner handleRef={handleRef} />;
+}
+
 export function SelfBillPage() {
   const partner = usePartner();
+  const inOnboarding = useIsOnboarding();
   const [bills, setBills] = useState<SelfBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (inOnboarding) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -1302,59 +1762,28 @@ export function SelfBillPage() {
     return () => {
       cancelled = true;
     };
-  }, [partner.id]);
+  }, [partner.id, inOnboarding]);
 
-  const accumulating = bills.find((b) => b.isAccumulating);
   const past = bills.filter((b) => !b.isAccumulating);
 
   return (
     <>
-      <SettingsHeader title="Self-bill" subtitle="UK self-billing: Fixfy issues invoices to you for completed jobs. HMRC-compliant." />
+      {!inOnboarding && <SettingsHeader title="Self-bill" subtitle="UK self-billing: Fixfy issues invoices to you for completed jobs. HMRC-compliant." />}
 
       <PageCard title="Agreement" subtitle="Valid 12 months. Re-sign required at 11 months." action={<Badge tone="success" icon="shield-check">Signed</Badge>}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 14, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: inOnboarding ? "1fr" : "1fr auto", gap: 14, alignItems: "center" }}>
           <div style={{ fontSize: 12.5, color: T.slate, lineHeight: 1.6 }}>
             You authorise GET FIXFY LTD to issue self-bill invoices on your behalf for jobs completed via the platform. You agree not to issue separate invoices for the same work.
           </div>
-          <Button variant="secondary" icon="download">View agreement</Button>
+          {!inOnboarding && <Button variant="secondary" icon="download">View agreement</Button>}
         </div>
       </PageCard>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <Card>
-          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${T.line}`, fontSize: 14, fontWeight: 500, color: T.navy }}>VAT status</div>
-          <div style={{ padding: 18 }}>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-              <RadioOption selected label="Not VAT registered" hint="Threshold £90,000/yr" />
-              <RadioOption selected={false} label="VAT registered" hint="Self-bills include VAT lines" />
-            </div>
-            <Input value="" placeholder="VAT number (if registered)" prefix="GB" />
-          </div>
-        </Card>
-        <Card>
-          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${T.line}`, fontSize: 14, fontWeight: 500, color: T.navy }}>Payout schedule</div>
-          <div style={{ padding: 18 }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              <RadioOption selected label="Weekly · Friday" hint="Default · Net-7" />
-              <RadioOption selected={false} label="Fortnightly" />
-              <RadioOption selected={false} label="Monthly" />
-            </div>
-            <div style={{ marginTop: 14, padding: "10px 12px", background: T.paper, borderRadius: 8, fontSize: 12, color: T.slate }}>
-              {accumulating ? (
-                <>
-                  This week ({accumulating.period}): <b className="fx-mono" style={{ color: T.navy }}>{formatGBPdec(accumulating.net)} net</b> from{" "}
-                  {accumulating.jobs} job{accumulating.jobs === 1 ? "" : "s"} so far.
-                </>
-              ) : (
-                <>Completed jobs accumulate into a weekly self-bill, paid Net-7.</>
-              )}
-            </div>
-          </div>
-        </Card>
-      </div>
+      <PaymentHowItWorksCard />
 
-      <PayoutsCard />
+      {!inOnboarding && <PayoutsCard />}
 
+      {!inOnboarding && (
       <PageCard title="Past self-bills">
         {loading ? (
           <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1399,21 +1828,8 @@ export function SelfBillPage() {
           </div>
         )}
       </PageCard>
+      )}
     </>
-  );
-}
-
-function RadioOption({ selected, label, hint }: { selected: boolean; label: string; hint?: string }) {
-  return (
-    <div style={{ flex: 1, padding: 12, borderRadius: 8, border: `1.5px solid ${selected ? T.coral : T.line}`, background: selected ? T.coralTint : T.white, cursor: "pointer" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 14, height: 14, borderRadius: 9999, border: `2px solid ${selected ? T.coral : T.lineStrong}`, background: T.white, position: "relative" }}>
-          {selected && <span style={{ position: "absolute", inset: 2, borderRadius: 9999, background: T.coral }} />}
-        </span>
-        <span style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{label}</span>
-      </div>
-      {hint && <div style={{ fontSize: 11.5, color: T.mute, marginTop: 4, marginLeft: 22 }}>{hint}</div>}
-    </div>
   );
 }
 
@@ -1427,6 +1843,7 @@ interface RequiredDoc {
 
 export function DocsPage({ onChanged }: { onChanged?: () => void } = {}) {
   const partner = usePartner();
+  const inOnboarding = useIsOnboarding();
   const toast = useToast();
   const [docs, setDocs] = useState<PartnerDoc[]>([]);
   const [required, setRequired] = useState<RequiredDoc[]>([]);
@@ -1484,7 +1901,7 @@ export function DocsPage({ onChanged }: { onChanged?: () => void } = {}) {
 
   return (
     <>
-      <SettingsHeader title="Documents & certifications" subtitle="What we need on file before you can pick up work." />
+      {!inOnboarding && <SettingsHeader title="Documents & certifications" subtitle="What we need on file before you can pick up work." />}
       {loading ? (
         <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="loader" size={14} color={T.mute} /> Loading documents…
@@ -1685,40 +2102,62 @@ function DocUploadCard({ busy, onUpload }: { busy: boolean; onUpload: (name: str
 const CONTRACT_ICON: Record<string, string> = {
   terms_of_use: "gavel",
   self_bill_agreement: "receipt",
+  contractor_service_agreement: "file-signature",
 };
 
 export function PoliciesPage() {
   const partner = usePartner();
   const toast = useToast();
+  const inOnboarding = useIsOnboarding();
   const [contracts, setContracts] = useState<PartnerContract[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState<PartnerContract | null>(null);
-  const [signing, setSigning] = useState<PartnerContract | null>(null);
+  const [bulkSigning, setBulkSigning] = useState(false);
   const [sig, setSig] = useState<string | null>(null);
   const [signerName, setSignerName] = useState(`${partner.firstName} ${partner.lastName}`.trim());
   const [signBusy, setSignBusy] = useState(false);
 
-  const submitSignature = async () => {
-    if (!signing || !sig || !signerName.trim()) return;
+  const visibleContracts = contracts.filter((c) => !isEmploymentContract(c));
+  const unsignedContracts = visibleContracts.filter((c) => !c.signed);
+  const allSigned = visibleContracts.length > 0 && unsignedContracts.length === 0;
+
+  const submitBulkSignature = async () => {
+    if (!sig || !signerName.trim() || unsignedContracts.length === 0) return;
     setSignBusy(true);
     try {
-      const res = await fetch("/api/contracts/sign", {
+      const res = await fetch("/api/contracts/sign-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contractVersionId: signing.versionId,
-          contractType: signing.type,
-          signatureDataUrl: sig,
+          signatureImageBase64: sig,
           signerName: signerName.trim(),
+          deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't sign");
       const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-      setContracts((prev) => prev.map((c) => (c.versionId === signing.versionId ? { ...c, signed: true, signedAt: today } : c)));
-      toast({ text: "Contract signed", icon: "check" });
-      setSigning(null);
+      const signedByVersion = new Map(
+        (json.contracts as Array<{ contractVersionId: string; signaturePdfUrl: string | null }> | undefined)?.map((r) => [
+          r.contractVersionId,
+          r.signaturePdfUrl,
+        ]) ?? [],
+      );
+      setContracts((prev) =>
+        prev.map((c) =>
+          signedByVersion.has(c.versionId) || unsignedContracts.some((u) => u.versionId === c.versionId)
+            ? {
+                ...c,
+                signed: true,
+                signedAt: today,
+                signaturePdfUrl: signedByVersion.get(c.versionId) ?? c.signaturePdfUrl,
+              }
+            : c,
+        ),
+      );
+      toast({ text: "All agreements signed", icon: "check" });
+      setBulkSigning(false);
       setSig(null);
     } catch (e) {
       toast({ text: e instanceof Error ? e.message : "Couldn't sign", icon: "alert-triangle", tone: "coral" });
@@ -1726,6 +2165,13 @@ export function PoliciesPage() {
       setSignBusy(false);
     }
   };
+
+  useRegisterOnboardingSave(async () => {
+    if (loading) return false;
+    if (allSigned) return true;
+    toast({ text: "Sign all agreements before continuing", icon: "alert-triangle", tone: "coral" });
+    return false;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1748,59 +2194,84 @@ export function PoliciesPage() {
 
   return (
     <>
-      <SettingsHeader title="Policies & contracts" subtitle="The agreements that govern working with Fixfy. Read them any time." />
+      {!inOnboarding && <SettingsHeader title="Policies & contracts" subtitle="The agreements that govern working with Fixfy. Read them any time." />}
       {loading ? (
         <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="loader" size={14} color={T.mute} /> Loading policies…
         </div>
       ) : error ? (
         <div style={{ padding: 8, color: T.coral, fontSize: 13 }}>{error}</div>
-      ) : contracts.length === 0 ? (
+      ) : visibleContracts.length === 0 ? (
         <div style={{ padding: 8, color: T.mute, fontSize: 13 }}>No active contracts published.</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          {contracts.map((c) => (
-            <Card key={c.versionId} style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
+        <>
+          {unsignedContracts.length > 0 && (
+            <Card style={{ padding: 16, marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>
+                  {unsignedContracts.length} agreement{unsignedContracts.length === 1 ? "" : "s"} to sign
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
-                  <div style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
-                    {c.version && <>v{c.version} · </>}
-                    {c.signed ? `Signed${c.signedAt ? ` ${c.signedAt}` : ""}` : "Not signed yet"}
-                  </div>
+                <div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>
+                  One signature covers all agreements below. Read each one first if you need to.
                 </div>
-                {c.signed ? (
-                  <Badge tone="success" size="sm" icon="check">Signed</Badge>
-                ) : (
-                  <Badge tone="warning" size="sm">Pending</Badge>
-                )}
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)} style={{ flex: 1 }}>
-                  Read
-                </Button>
-                {!c.signed && (
-                  <Button variant="primary" size="sm" icon="pen-line" onClick={() => { setSig(null); setSigning(c); }} style={{ flex: 1 }}>
-                    Sign
-                  </Button>
-                )}
-              </div>
+              <Button variant="primary" icon="pen-line" onClick={() => { setSig(null); setBulkSigning(true); }}>
+                Sign all agreements
+              </Button>
             </Card>
-          ))}
-        </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {visibleContracts.map((c) => (
+              <Card key={c.versionId} style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
+                  </div>
+                  {c.signed ? (
+                    <Badge tone="success" size="sm" icon="check">Signed</Badge>
+                  ) : (
+                    <Badge tone="warning" size="sm">Pending</Badge>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)} style={{ flex: 1, minWidth: 100 }}>
+                    Read
+                  </Button>
+                  {c.signed && c.signaturePdfUrl ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon="download"
+                      onClick={() => window.open(c.signaturePdfUrl!, "_blank", "noopener,noreferrer")}
+                      style={{ flex: 1, minWidth: 100 }}
+                    >
+                      PDF
+                    </Button>
+                  ) : null}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
 
-      {signing && (
-        <Modal title={`Sign — ${signing.title}`} onClose={() => setSigning(null)} width={520}>
+      {bulkSigning && (
+        <Modal title="Sign all agreements" onClose={() => setBulkSigning(false)} width={520}>
           <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontSize: 12.5, color: T.slate, lineHeight: 1.5 }}>
-              By signing you agree to the {signing.title}
-              {signing.version ? ` (v${signing.version})` : ""}. Your name, the time, your IP and device are recorded for a
-              legally-valid UK e-signature.
+              By signing once below you agree to all of the following. Your name, the time, your IP and device are recorded
+              for a legally-valid UK e-signature on each agreement.
             </div>
+            <Card style={{ padding: 12, background: T.paper2 }}>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: T.ink, lineHeight: 1.6 }}>
+                {unsignedContracts.map((c) => (
+                  <li key={c.versionId}>{c.title}{c.version ? ` (v${c.version})` : ""}</li>
+                ))}
+              </ul>
+            </Card>
             <div>
               <div style={{ fontSize: 12, fontWeight: 500, color: T.ink, marginBottom: 6 }}>Full name</div>
               <Input value={signerName} onChange={setSignerName} placeholder="Your full legal name" />
@@ -1809,17 +2280,11 @@ export function PoliciesPage() {
               <div style={{ fontSize: 12, fontWeight: 500, color: T.ink, marginBottom: 6 }}>Signature</div>
               <SignaturePad onChange={setSig} />
             </div>
-            <button
-              style={{ alignSelf: "flex-start", padding: 0, background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: 8, alignItems: "flex-start" }}
-            >
-              <Icon name="info" size={13} color={T.mute} />
-              <span style={{ fontSize: 11.5, color: T.mute, textAlign: "left" }}>Read the full text first via the Read button.</span>
-            </button>
           </div>
           <div style={{ padding: 16, borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Button variant="secondary" onClick={() => setSigning(null)} disabled={signBusy}>Cancel</Button>
-            <Button variant="primary" icon="check" onClick={submitSignature} disabled={signBusy || !sig || !signerName.trim()}>
-              {signBusy ? "Signing…" : "Agree & sign"}
+            <Button variant="secondary" onClick={() => setBulkSigning(false)} disabled={signBusy}>Cancel</Button>
+            <Button variant="primary" icon="check" onClick={submitBulkSignature} disabled={signBusy || !sig || !signerName.trim()}>
+              {signBusy ? "Signing…" : "Agree & sign all"}
             </Button>
           </div>
         </Modal>
@@ -1829,7 +2294,7 @@ export function PoliciesPage() {
         <Modal title={reading.title} onClose={() => setReading(null)} width={680}>
           <div style={{ padding: 20, maxHeight: "60vh", overflow: "auto", fontSize: 13, color: T.ink, lineHeight: 1.6 }}>
             {reading.bodyHtml ? (
-              <div dangerouslySetInnerHTML={{ __html: reading.bodyHtml }} />
+              <div dangerouslySetInnerHTML={{ __html: hydrateContractHtml(reading.bodyHtml) }} />
             ) : (
               <div style={{ color: T.mute }}>No contract text available.</div>
             )}

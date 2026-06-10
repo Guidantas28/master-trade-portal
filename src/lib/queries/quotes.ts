@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { QuoteRequest, QuoteRequestStatus } from "@/types";
+import { extractPostcode } from "@/lib/partner-quote-access";
 import { tradeMatchesService } from "@/lib/trade-match";
 import {
   type PartnerBidProposalPayload,
@@ -27,6 +28,9 @@ interface QuoteRow {
   id: string;
   reference: string | null;
   title: string | null;
+  scope: string | null;
+  property_address: string | null;
+  service_type: string | null;
   status: string | null;
   total_value: number | null;
   expires_at: string | null;
@@ -92,7 +96,7 @@ export async function fetchAvailableQuotes(supabase: SupabaseClient, partnerId: 
   const { data: broadcastRows } = await supabase
     .from("quotes")
     .select(
-      "id,reference,title,status,total_value,expires_at,request_id,catalog_service_id," +
+      "id,reference,title,scope,property_address,service_type,status,total_value,expires_at,request_id,catalog_service_id," +
         "catalog_service:service_catalog!quotes_catalog_service_id_fkey(name)",
     )
     .in("status", BROADCAST_OPEN_STATUSES)
@@ -120,7 +124,7 @@ export async function fetchAvailableQuotes(supabase: SupabaseClient, partnerId: 
   const { data: quotes, error: qErr } = await supabase
     .from("quotes")
     .select(
-      "id,reference,title,status,total_value,expires_at,request_id,catalog_service_id," +
+      "id,reference,title,scope,property_address,service_type,status,total_value,expires_at,request_id,catalog_service_id," +
         "catalog_service:service_catalog!quotes_catalog_service_id_fkey(name)",
     )
     .in("id", quoteIds)
@@ -141,14 +145,21 @@ export async function fetchAvailableQuotes(supabase: SupabaseClient, partnerId: 
     const myBid = bidRows.find((b) => b.quote_id === q.id && b.partner_id === partnerId);
     const status = deriveStatus(q.status ?? "", myBid?.status ?? null);
 
+    const catalogName = q.catalog_service?.name?.trim() ?? "";
+    const serviceType = (q.service_type?.trim() || catalogName || q.title?.trim()) || undefined;
+    const propertyAddress = q.property_address?.trim() || undefined;
+    const postcode = extractPostcode(q.property_address) || "";
+
     return {
       id: q.id,
       reference: q.reference ?? undefined,
       title: q.title || "Quote request",
-      desc: "", // originating service_request isn't partner-readable (RLS)
-      trades: [], // no per-quote trade in the schema
-      postcode: "", // see above
-      distance: 0, // no geo distance available
+      desc: q.scope?.trim() || "",
+      trades: serviceType ? [serviceType] : [],
+      serviceType,
+      propertyAddress,
+      postcode,
+      distance: 0,
       deadline: fmtDeadline(q.expires_at),
       status,
       yourBid: myBid?.bid_amount ?? undefined,

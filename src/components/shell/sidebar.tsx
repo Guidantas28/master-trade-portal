@@ -1,11 +1,12 @@
 "use client";
 
 // Sidebar, TrialCard, UserMiniCard — ported from shell.jsx.
-// The brand logo asset isn't bundled, so the lowercase `fixfy` wordmark is rendered as text.
-
 import { useState, type CSSProperties } from "react";
+import { AuthWordmark, BrandPanelBackground } from "@/components/brand/auth-wordmark";
 import { T } from "@/lib/tokens";
+import { PartnerRatingInline } from "@/components/ui/partner-rating";
 import { Avatar, Icon } from "@/components/ui/primitives";
+import { usePartnerRating } from "@/hooks/use-partner-rating";
 import { usePartner } from "@/components/partner-context";
 import { useMyJobs } from "@/components/jobs-context";
 import { createClient } from "@/lib/supabase/client";
@@ -25,7 +26,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: "Opportunities",
     items: [
-      { id: "leads", label: "Hot Leads", icon: "sparkles", hot: true },
+      { id: "leads", label: "Hot Leads", icon: "user-plus", hot: true },
       { id: "available", label: "Available Jobs", icon: "wrench" },
       { id: "quotes", label: "Available Quotes", icon: "file-text" },
     ],
@@ -60,12 +61,10 @@ export function Wordmark({ color = T.navy, height = 18 }: { color?: string; heig
 export function Sidebar({
   active,
   onNav,
-  onOpenOnboarding,
   density = "comfortable",
 }: {
   active: string;
   onNav: (id: string) => void;
-  onOpenOnboarding: () => void;
   density?: "comfortable" | "compact";
 }) {
   const isDense = density === "compact";
@@ -135,35 +134,19 @@ export function Sidebar({
   }
 
   return (
-    <aside
+    <BrandPanelBackground
       style={{
         width: 240,
         flex: "0 0 240px",
         height: "100vh",
-        background: T.ink,
         borderRight: `1px solid rgba(255,255,255,0.06)`,
         display: "flex",
         flexDirection: "column",
         padding: "14px 12px 12px",
       }}
     >
-      {/* Logo */}
-      <div style={{ padding: "4px 8px 16px", display: "flex", alignItems: "center", gap: 8 }}>
-        <Wordmark color={T.white} />
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 500,
-            color: "rgba(255,255,255,0.6)",
-            padding: "2px 6px",
-            background: "rgba(255,255,255,0.08)",
-            borderRadius: 4,
-            letterSpacing: 0.4,
-            marginLeft: "auto",
-          }}
-        >
-          TRADE
-        </span>
+      <div style={{ padding: "4px 8px 16px" }}>
+        <AuthWordmark light size={18} />
       </div>
 
       {/* Nav sections */}
@@ -195,8 +178,8 @@ export function Sidebar({
       </div>
 
       <TrialCard onUpgrade={() => onNav("settings:billing")} />
-      <UserMiniCard onOpenOnboarding={onOpenOnboarding} onSettings={() => onNav("settings")} />
-    </aside>
+      <UserMiniCard onSettings={() => onNav("settings")} />
+    </BrandPanelBackground>
   );
 }
 
@@ -266,15 +249,10 @@ function TrialCard({ onUpgrade }: { onUpgrade: () => void }) {
   );
 }
 
-function UserMiniCard({
-  onSettings,
-  onOpenOnboarding,
-}: {
-  onSettings: () => void;
-  onOpenOnboarding: () => void;
-}) {
+function UserMiniCard({ onSettings }: { onSettings: () => void }) {
   const [open, setOpen] = useState(false);
   const partner = usePartner();
+  const { rating } = usePartnerRating(partner.rating);
   const signOut = async () => {
     await createClient().auth.signOut();
     window.location.href = "/login";
@@ -310,7 +288,10 @@ function UserMiniCard({
           >
             {partner.firstName} {partner.lastName}
           </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{partner.primaryTrade}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{partner.primaryTrade}</span>
+            <PartnerRatingInline rating={rating} size="xs" dark />
+          </div>
         </div>
         <Icon name="chevrons-up-down" size={14} color="rgba(255,255,255,0.5)" />
       </button>
@@ -332,7 +313,6 @@ function UserMiniCard({
           onMouseLeave={() => setOpen(false)}
         >
           <MenuItem icon="user" label="Profile" onClick={() => { onSettings(); setOpen(false); }} />
-          <MenuItem icon="play-circle" label="Re-run onboarding" onClick={() => { onOpenOnboarding(); setOpen(false); }} />
           <MenuItem icon="life-buoy" label="Help & support" />
           <div style={{ height: 1, background: T.line, margin: "6px 4px" }} />
           <MenuItem icon="log-out" label="Sign out" onClick={signOut} />

@@ -1,18 +1,19 @@
 "use client";
 
-// Partner work-report form rendered inside the job drawer's "Report" tab. A faithful port of the
-// OS public report form (master-os src/app/quote/respond/public-report-form.tsx): same templates,
-// fields and photo slots, but built with the portal's design tokens (no Tailwind) and submitting
-// to /api/jobs/report (session-authed) which writes jobs.start_report / final_report to the DB.
+// Partner work-report form — mirrors master-os public-report-form.tsx (same templates,
+// fields, photo slots, certificate PDF upload) submitting to /api/jobs/report.
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { T } from "@/lib/tokens";
-import { Button, Field, Icon, Input, Toggle } from "@/components/ui/primitives";
+import { Button, Field, Icon, Input } from "@/components/ui/primitives";
 import {
   fieldsForTemplate,
   photoSlotsForTemplate,
   pickReportTemplate,
+  reportSectionTitles,
+  reportTemplateDisplayLabel,
   type ReportField,
+  type ReportPhotoSlot,
 } from "@/lib/report-templates";
 import type { MyJob } from "@/types";
 import type { ToastInput } from "@/components/ui/toast";
@@ -20,14 +21,61 @@ import type { ToastInput } from "@/components/ui/toast";
 type ShowToast = (t: ToastInput) => void;
 type FieldValue = string | number | boolean;
 
-const sectionTitle: CSSProperties = { fontSize: 14, fontWeight: 600, color: T.ink, margin: "0 0 4px" };
+const MAX_PHOTO_LONG_EDGE = 1600;
+const PHOTO_JPEG_QUALITY = 0.75;
+
+const sectionTitle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 1,
+  color: T.coral,
+  textTransform: "uppercase",
+  margin: "0 0 12px",
+};
 const labelStyle: CSSProperties = { display: "block", fontSize: 13, fontWeight: 500, color: T.ink, marginBottom: 6 };
 const hintStyle: CSSProperties = { fontSize: 11.5, color: T.mute, marginTop: 4 };
+
+async function downscaleImage(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const longest = Math.max(bitmap.width, bitmap.height);
+  const scale = longest > MAX_PHOTO_LONG_EDGE ? MAX_PHOTO_LONG_EDGE / longest : 1;
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not get canvas context.");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("Image encode failed."))),
+      "image/jpeg",
+      PHOTO_JPEG_QUALITY,
+    );
+  });
+  bitmap.close();
+  return blob;
+}
+
+function isPdfFile(file: File): boolean {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+async function prepareUploadFile(file: File, slotKey: string, index: number): Promise<File> {
+  if (isPdfFile(file)) return file;
+  const blob = await downscaleImage(file);
+  return new File([blob], `${slotKey}-${index}.jpg`, { type: "image/jpeg" });
+}
 
 export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onShowToast: ShowToast; onClose: () => void }) {
   const template = useMemo(() => pickReportTemplate({ serviceType: job.trade, title: job.title }), [job.trade, job.title]);
   const spec = useMemo(() => fieldsForTemplate(template), [template]);
   const photoSlots = useMemo(() => photoSlotsForTemplate(template), [template]);
+  const sections = useMemo(() => reportSectionTitles(template), [template]);
+  const templateLabel = reportTemplateDisplayLabel(template);
+  const isCertificate = template === "certificate";
+  const certificateUploadFirst = isCertificate && photoSlots.final.length > 0;
 
   const [data, setData] = useState<Record<string, FieldValue>>({});
   const [photos, setPhotos] = useState<Record<string, File[]>>({});
@@ -39,7 +87,6 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
   const [alreadySubmitted, setAlreadySubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Lock the form if a report was already submitted for this job.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -48,7 +95,7 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
         const json = await res.json();
         if (!cancelled && res.ok && json.submitted) setAlreadySubmitted(true);
       } catch {
-        /* ignore — treat as not submitted */
+        /* treat as not submitted */
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -67,14 +114,41 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
     setPhotos((p) => ({ ...p, [slot]: (p[slot] ?? []).filter((_, i) => i !== idx) }));
   }, []);
 
+  const renderBoolean = (f: ReportField, val: FieldValue) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      {[true, false].map((b) => (
+        <button
+          key={String(b)}
+          type="button"
+          onClick={() => setField(f.key, b)}
+          style={{
+            minWidth: 72,
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: `1px solid ${val === b ? T.navy : T.line}`,
+            background: val === b ? T.navy : T.white,
+            color: val === b ? T.white : T.slate,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            fontFamily: T.sans,
+          }}
+        >
+          {b ? "Yes" : "No"}
+        </button>
+      ))}
+    </div>
+  );
+
   const renderField = (f: ReportField) => {
     if (f.showIf && data[f.showIf.key] !== f.showIf.equals) return null;
     const v = data[f.key];
     if (f.type === "boolean") {
       return (
-        <div key={f.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "6px 0" }}>
-          <span style={{ fontSize: 13, color: T.ink }}>{f.label}</span>
-          <Toggle on={v === true} onChange={(on) => setField(f.key, on)} />
+        <div key={f.key}>
+          <label style={labelStyle}>{f.label}</label>
+          {renderBoolean(f, v)}
+          {f.hint && <div style={hintStyle}>{f.hint}</div>}
         </div>
       );
     }
@@ -127,13 +201,13 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
               color: T.ink,
               resize: "vertical",
               outline: "none",
+              boxSizing: "border-box",
             }}
           />
           {f.hint && <div style={hintStyle}>{f.hint}</div>}
         </div>
       );
     }
-    // text | number
     return (
       <div key={f.key}>
         <label style={labelStyle}>{f.label}</label>
@@ -147,38 +221,111 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
     );
   };
 
-  const renderPhotoSlot = (slot: { key: string; label: string }) => {
+  const renderPhotoThumb = (slot: string, file: File, i: number) => {
+    const pdf = isPdfFile(file);
+    return (
+      <div
+        key={`${slot}-${i}`}
+        style={{ position: "relative", width: 72, height: 72, borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}`, background: T.paper2 }}
+      >
+        {pdf ? (
+          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: T.slate, padding: 4, textAlign: "center" }}>
+            PDF
+          </div>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={URL.createObjectURL(file)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        )}
+        <button
+          type="button"
+          onClick={() => removePhoto(slot, i)}
+          aria-label="Remove file"
+          style={{ position: "absolute", top: 2, right: 2, width: 18, height: 18, borderRadius: 9999, border: "none", background: "rgba(2,0,64,0.7)", color: "#fff", cursor: "pointer", fontSize: 11, lineHeight: 1 }}
+        >
+          ×
+        </button>
+      </div>
+    );
+  };
+
+  const renderPhotoSlot = (slot: ReportPhotoSlot) => {
     const files = photos[slot.key] ?? [];
+    const accept = slot.accept ?? "image/*";
+
+    if (slot.prominent) {
+      return (
+        <div key={slot.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <p style={{ fontSize: 13, fontWeight: 600, color: T.navy, margin: 0 }}>{slot.label}</p>
+            {slot.hint ? <p style={{ fontSize: 12, color: T.mute, margin: "4px 0 0", lineHeight: 1.45 }}>{slot.hint}</p> : null}
+            {slot.optional ? <p style={{ fontSize: 11, color: T.mute, margin: "2px 0 0" }}>Optional</p> : null}
+          </div>
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              padding: "24px 16px",
+              borderRadius: 12,
+              border: `2px dashed ${T.coral}55`,
+              background: T.coralTint,
+              cursor: "pointer",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ width: 44, height: 44, borderRadius: 9999, background: T.coral, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="upload" size={20} color={T.white} />
+            </div>
+            <div>
+              <p style={{ fontSize: 14, fontWeight: 600, color: T.navy, margin: 0 }}>Tap to upload certificate</p>
+              <p style={{ fontSize: 12, color: T.mute, margin: "4px 0 0" }}>PDF or photo · multiple files OK</p>
+            </div>
+            <input type="file" accept={accept} multiple style={{ display: "none" }} onChange={(e) => addPhotos(slot.key, e.target.files)} />
+          </label>
+          {files.length > 0 ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{files.map((f, i) => renderPhotoThumb(slot.key, f, i))}</div>
+          ) : null}
+        </div>
+      );
+    }
+
     return (
       <div key={slot.key} style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: files.length ? 10 : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: files.length ? 10 : 0, gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{slot.label}</span>
           <label style={{ cursor: "pointer", fontSize: 12, fontWeight: 500, color: T.coral, display: "inline-flex", alignItems: "center", gap: 5 }}>
             <Icon name="image-plus" size={13} color={T.coral} /> Add photos
-            <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => addPhotos(slot.key, e.target.files)} />
+            <input type="file" accept={accept} multiple capture="environment" style={{ display: "none" }} onChange={(e) => addPhotos(slot.key, e.target.files)} />
           </label>
         </div>
-        {files.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {files.map((f, i) => (
-              <div key={i} style={{ position: "relative", width: 64, height: 64, borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={URL.createObjectURL(f)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                <button
-                  type="button"
-                  onClick={() => removePhoto(slot.key, i)}
-                  aria-label="Remove photo"
-                  style={{ position: "absolute", top: 2, right: 2, width: 18, height: 18, borderRadius: 9999, border: "none", background: "rgba(2,0,64,0.7)", color: "#fff", cursor: "pointer", fontSize: 11, lineHeight: 1 }}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
+        {slot.optional ? <p style={{ fontSize: 11, color: T.mute, margin: "0 0 8px" }}>Optional</p> : null}
+        {files.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{files.map((f, i) => renderPhotoThumb(slot.key, f, i))}</div>
+        ) : (
+          <p style={{ fontSize: 11, color: T.mute, margin: 0 }}>No photos added</p>
         )}
       </div>
     );
   };
+
+  const sectionCard = (title: string, children: React.ReactNode) => (
+    <section
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        padding: 16,
+        borderRadius: 12,
+        border: `1px solid ${T.line}`,
+        background: T.white,
+      }}
+    >
+      <h3 style={sectionTitle}>{title}</h3>
+      {children}
+    </section>
+  );
 
   const submit = async () => {
     setError(null);
@@ -208,13 +355,17 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
     form.set("template", template);
     form.set("startData", JSON.stringify(startFields));
     form.set("finalData", JSON.stringify(finalFields));
-    for (const [slot, files] of Object.entries(photos)) {
-      files.forEach((file, i) => form.append(`photos[${slot}][]`, file, file.name || `${slot}-${i}.jpg`));
-    }
 
     setSubmitting(true);
-    setProgress("Uploading report…");
+    setProgress("Processing files…");
     try {
+      for (const [slot, slotFiles] of Object.entries(photos)) {
+        for (let i = 0; i < slotFiles.length; i++) {
+          const prepared = await prepareUploadFile(slotFiles[i], slot, i);
+          form.append(`photos[${slot}][]`, prepared);
+        }
+      }
+      setProgress("Uploading report…");
       const res = await fetch("/api/jobs/report", { method: "POST", body: form });
       const body = (await res.json().catch(() => null)) as { error?: string; jobReference?: string } | null;
       if (!res.ok) {
@@ -255,30 +406,68 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
   }
 
   return (
-    <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 18 }}>
-      <div style={{ fontSize: 11.5, color: T.mute }}>
-        Template: <b style={{ color: T.ink, fontWeight: 500, textTransform: "capitalize" }}>{template}</b>
-      </div>
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+      <header style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 11.5, color: T.mute }}>Template</span>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+            padding: "3px 8px",
+            borderRadius: 9999,
+            background: T.blue50,
+            color: T.blue,
+          }}
+        >
+          {templateLabel}
+        </span>
+      </header>
 
-      {/* On arrival */}
-      <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <h3 style={sectionTitle}>On arrival</h3>
-        {spec.start.map(renderField)}
-        {photoSlots.start.map(renderPhotoSlot)}
-      </section>
+      {spec.start.length > 0
+        ? sectionCard(
+            sections.start,
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>{spec.start.map(renderField)}</div>
+              {photoSlots.start.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+                  {photoSlots.start.map(renderPhotoSlot)}
+                </div>
+              ) : null}
+            </>,
+          )
+        : null}
 
-      {/* On completion */}
-      <section style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 14, borderTop: `1px solid ${T.line}` }}>
-        <h3 style={sectionTitle}>On completion</h3>
-        {spec.final.map(renderField)}
-        <Field label="Time spent on site">
-          <div style={{ display: "flex", gap: 8 }}>
-            <Input type="number" placeholder="hours" value={hours} onChange={setHours} style={{ width: 110 }} />
-            <Input type="number" placeholder="mins" value={minutes} onChange={setMinutes} style={{ width: 110 }} />
+      {sectionCard(
+        sections.final,
+        <>
+          {certificateUploadFirst ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{photoSlots.final.map(renderPhotoSlot)}</div>
+          ) : null}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>{spec.final.map(renderField)}</div>
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 10,
+              border: `1px solid ${T.line}`,
+              background: T.paper2,
+            }}
+          >
+            <Field label="Time spent on site">
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Input type="number" placeholder="Hours" value={hours} onChange={setHours} style={{ flex: "1 1 100px", minWidth: 100 }} />
+                <Input type="number" placeholder="Mins" value={minutes} onChange={setMinutes} style={{ flex: "1 1 100px", minWidth: 100 }} />
+              </div>
+            </Field>
           </div>
-        </Field>
-        {photoSlots.final.map(renderPhotoSlot)}
-      </section>
+          {!certificateUploadFirst && photoSlots.final.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+              {photoSlots.final.map(renderPhotoSlot)}
+            </div>
+          ) : null}
+        </>,
+      )}
 
       {error && (
         <div style={{ borderRadius: 8, background: "rgba(237,75,0,0.08)", border: `1px solid ${T.coral}`, padding: 10, fontSize: 12.5, color: T.coral }}>
@@ -286,7 +475,7 @@ export function JobReportForm({ job, onShowToast, onClose }: { job: MyJob; onSho
         </div>
       )}
 
-      <Button variant="primary" size="lg" icon="send" onClick={() => void submit()} disabled={submitting}>
+      <Button variant="primary" size="lg" icon="send" onClick={() => void submit()} disabled={submitting} style={{ width: "100%" }}>
         {submitting ? progress || "Submitting…" : "Submit report"}
       </Button>
     </div>

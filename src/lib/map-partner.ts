@@ -5,6 +5,7 @@
 // until the schema gains them (trial/subscription land with the Stripe phase; bio,
 // postcode, radius, years-experience aren't columns yet).
 
+import { displayPartnerRating } from "@/lib/partner-rating";
 import type { Partner, Trade } from "@/types";
 
 export interface PartnerRow {
@@ -45,8 +46,8 @@ function daysUntil(iso?: string | null): number {
 export function mapPartner(row: PartnerRow): Partner {
   const contact = row.contact_name?.trim() || row.company_name?.trim() || "Partner";
   const [firstName, ...rest] = contact.split(/\s+/);
-  const primary = (row.trade?.trim() || "General Maintenance") as Trade;
-  const enabled = (row.trades && row.trades.length ? row.trades : [primary]) as Trade[];
+  const primary = (row.trade?.trim() || "") as Trade;
+  const enabled = (row.trades && row.trades.length ? row.trades : primary ? [primary] : []) as Trade[];
 
   return {
     id: row.id,
@@ -67,7 +68,7 @@ export function mapPartner(row: PartnerRow): Partner {
     yearsExperience: row.years_experience ?? 0,
     bio: row.bio ?? "",
     excludedPostcodes: row.excluded_postcodes ?? [],
-    rating: row.rating ?? 0,
+    rating: displayPartnerRating(row.rating),
     ratingsCount: row.jobs_completed ?? 0,
   };
 }

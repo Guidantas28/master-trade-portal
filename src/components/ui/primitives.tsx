@@ -391,20 +391,23 @@ export function Toggle({
   label,
   hint,
   size = "md",
+  disabled,
 }: {
   on: boolean;
   onChange?: (v: boolean) => void;
   label?: ReactNode;
   hint?: ReactNode;
   size?: "sm" | "md";
+  disabled?: boolean;
 }) {
   const sizes = { sm: { w: 28, h: 16, d: 12 }, md: { w: 36, h: 20, d: 16 } } as const;
   const s = sizes[size];
   return (
-    <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.85 : 1 }}>
       <button
         type="button"
-        onClick={() => onChange && onChange(!on)}
+        onClick={() => !disabled && onChange && onChange(!on)}
+        disabled={disabled}
         style={{
           width: s.w,
           height: s.h,
@@ -412,7 +415,7 @@ export function Toggle({
           borderRadius: 9999,
           background: on ? T.coral : T.line,
           border: "none",
-          cursor: "pointer",
+          cursor: disabled ? "default" : "pointer",
           position: "relative",
           transition: `background 120ms ${T.ease}`,
           flexShrink: 0,
@@ -651,6 +654,8 @@ export function StatCard({
   hero,
   icon,
   trend,
+  prevTrend,
+  compare,
   style,
   onClick,
 }: {
@@ -661,6 +666,8 @@ export function StatCard({
   hero?: boolean;
   icon?: string;
   trend?: number[];
+  prevTrend?: number[];
+  compare?: { text: string; tone: "green" | "coral" | "mute" };
   style?: CSSProperties;
   onClick?: () => void;
 }) {
@@ -706,21 +713,53 @@ export function StatCard({
       >
         {value}
       </div>
+      {compare && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            alignSelf: "flex-start",
+            padding: "3px 8px",
+            borderRadius: 9999,
+            fontSize: 11,
+            fontWeight: 600,
+            fontFamily: T.mono,
+            background: compare.tone === "green" ? T.green50 : compare.tone === "coral" ? T.coralTint : T.paper2,
+            color: compare.tone === "green" ? T.green : compare.tone === "coral" ? T.coral : T.mute,
+          }}
+        >
+          {compare.tone === "green" && <Icon name="trending-up" size={11} />}
+          {compare.tone === "coral" && <Icon name="trending-down" size={11} />}
+          {compare.text}
+        </span>
+      )}
       {trend && (
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 22 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 28 }}>
           {trend.map((v, i) => {
-            const max = Math.max(...trend);
+            const max = Math.max(...trend, ...(prevTrend ?? []), 1);
+            const prev = prevTrend?.[i] ?? 0;
             return (
-              <span
-                key={i}
-                style={{
-                  flex: 1,
-                  height: `${(v / max) * 100}%`,
-                  minHeight: 2,
-                  borderRadius: 1.5,
-                  background: hero ? T.coral : T.coralTint,
-                }}
-              />
+              <span key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "stretch", gap: 1, height: "100%", justifyContent: "flex-end" }}>
+                {prevTrend && (
+                  <span
+                    style={{
+                      height: `${(prev / max) * 45}%`,
+                      minHeight: prev > 0 ? 2 : 0,
+                      borderRadius: 1.5,
+                      background: hero ? "rgba(255,255,255,0.2)" : T.paper2,
+                    }}
+                  />
+                )}
+                <span
+                  style={{
+                    height: `${(v / max) * 100}%`,
+                    minHeight: 2,
+                    borderRadius: 1.5,
+                    background: hero ? T.coral : T.coralTint,
+                  }}
+                />
+              </span>
             );
           })}
         </div>
@@ -852,6 +891,29 @@ export function Modal({
         <div style={{ flex: 1, overflow: "auto" }}>{children}</div>
       </div>
     </div>
+  );
+}
+
+// ---------- Live indicator (Pulse-style) ----------
+export function LiveIndicator({ label = "Live", style }: { label?: string; style?: CSSProperties }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        fontFamily: T.mono,
+        fontSize: 10.5,
+        fontWeight: 500,
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        color: T.coral,
+        ...style,
+      }}
+    >
+      <span className="fx-live-dot" />
+      {label}
+    </span>
   );
 }
 

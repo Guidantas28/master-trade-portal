@@ -102,17 +102,84 @@ export async function GET() {
 
   // Count contacts per lead and whether I already contacted (presence of an offer row = contacted).
   const ids = matched.map((l) => l.id);
-  const { data: offers } = await svc
+  const { data: offers, error: offersErr } = await svc
     .from("lead_partner_offers")
-    .select("lead_id,partner_id")
+    .select("lead_id,partner_id,pipeline_status,offered_at,notes")
     .in("lead_id", ids);
 
   const contacted = new Map<string, number>();
   const mineContacted = new Set<string>();
-  for (const o of offers ?? []) {
-    const lid = o.lead_id as string;
-    contacted.set(lid, (contacted.get(lid) ?? 0) + 1);
-    if (o.partner_id === partner.id) mineContacted.add(lid);
+  const minePipeline = new Map<string, string>();
+  const mineContactedAt = new Map<string, string>();
+  const mineNotes = new Map<string, string>();
+  const pipelineColumnMissing = !!offersErr && /pipeline_status/.test(offersErr.message);
+  const notesColumnMissing = !!offersErr && /notes/.test(offersErr.message);
+
+  if (!offersErr) {
+    for (const o of offers ?? []) {
+      const lid = o.lead_id as string;
+      contacted.set(lid, (contacted.get(lid) ?? 0) + 1);
+      if (o.partner_id === partner.id) {
+        mineContacted.add(lid);
+        minePipeline.set(lid, (o.pipeline_status as string) || "contacted");
+        if (o.offered_at) mineContactedAt.set(lid, o.offered_at as string);
+        if (typeof o.notes === "string" && o.notes.trim()) mineNotes.set(lid, o.notes.trim());
+      }
+    }
+  } else if (!pipelineColumnMissing && !notesColumnMissing) {
+    return NextResponse.json({ error: offersErr.message }, { status: 500 });
+  } else if (pipelineColumnMissing) {
+    const { data: fallbackOffers, error: fallbackErr } = await svc
+      .from("lead_partner_offers")
+      .select("lead_id,partner_id,offered_at")
+      .in("lead_id", ids);
+    if (fallbackErr) return NextResponse.json({ error: fallbackErr.message }, { status: 500 });
+    for (const o of fallbackOffers ?? []) {
+      const lid = o.lead_id as string;
+      contacted.set(lid, (contacted.get(lid) ?? 0) + 1);
+      if (o.partner_id === partner.id) {
+        mineContacted.add(lid);
+        minePipeline.set(lid, "contacted");
+        if (o.offered_at) mineContactedAt.set(lid, o.offered_at as string);
+      }
+    }
+  } else {
+    const { data: fallbackOffers, error: fallbackErr } = await svc
+      .from("lead_partner_offers")
+      .select("lead_id,partner_id,pipeline_status,offered_at,notes")
+      .in("lead_id", ids);
+    if (fallbackErr) {
+      if (/notes/.test(fallbackErr.message)) {
+        const { data: noNotesOffers, error: noNotesErr } = await svc
+          .from("lead_partner_offers")
+          .select("lead_id,partner_id,pipeline_status,offered_at")
+          .in("lead_id", ids);
+        if (noNotesErr) return NextResponse.json({ error: noNotesErr.message }, { status: 500 });
+        for (const o of noNotesOffers ?? []) {
+          const lid = o.lead_id as string;
+          contacted.set(lid, (contacted.get(lid) ?? 0) + 1);
+          if (o.partner_id === partner.id) {
+            mineContacted.add(lid);
+            minePipeline.set(lid, (o.pipeline_status as string) || "contacted");
+            if (o.offered_at) mineContactedAt.set(lid, o.offered_at as string);
+          }
+        }
+      } else {
+        return NextResponse.json({ error: fallbackErr.message }, { status: 500 });
+      }
+    } else {
+      for (const o of fallbackOffers ?? []) {
+        const lid = o.lead_id as string;
+        contacted.set(lid, (contacted.get(lid) ?? 0) + 1);
+        if (o.partner_id === partner.id) {
+          mineContacted.add(lid);
+          minePipeline.set(lid, (o.pipeline_status as string) || "contacted");
+          if (o.offered_at) mineContactedAt.set(lid, o.offered_at as string);
+          const note = (o as { notes?: string | null }).notes;
+          if (typeof note === "string" && note.trim()) mineNotes.set(lid, note.trim());
+        }
+      }
+    }
   }
 
   const leads = matched
@@ -126,6 +193,9 @@ export async function GET() {
         offerId: l.id, // the lead id — used by the respond endpoint
         reference: l.reference,
         status: iContacted ? "contacted" : "offered",
+        pipelineStatus: iContacted ? minePipeline.get(l.id) ?? "contacted" : null,
+        contactedAt: iContacted ? mineContactedAt.get(l.id) ?? null : null,
+        notes: iContacted ? mineNotes.get(l.id) ?? null : null,
         title: l.name || l.scope || "Customer lead",
         desc: l.scope || "",
         postcode: l.postcode || "",

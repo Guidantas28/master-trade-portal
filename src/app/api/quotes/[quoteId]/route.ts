@@ -41,7 +41,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ quoteId: strin
   const { data: quote, error: qErr } = await svc
     .from("quotes")
     .select(
-      "id, reference, title, scope, property_address, client_name, service_type, status, expires_at, request_id, images, bidding_started_at, catalog_service_id, catalog_service:service_catalog!quotes_catalog_service_id_fkey(name)",
+      "id, reference, title, scope, property_address, client_name, service_type, status, expires_at, request_id, images, catalog_service_id, catalog_service:service_catalog!quotes_catalog_service_id_fkey(name)",
     )
     .eq("id", quoteId)
     .is("deleted_at", null)
@@ -106,7 +106,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ quoteId: strin
     scope,
     propertyAddress: quote.property_address?.trim() || "",
     postcode: extractPostcode(quote.property_address),
-    clientName: quote.client_name?.trim() || "—",
+    clientName: "Customer",
     serviceType,
     images,
     quoteStatus: quote.status ?? "",
