@@ -1,4 +1,4 @@
-// POST /api/auth/signup  { email, fullName, company, trade, phone? }
+// POST /api/auth/signup  { email, fullName, company }
 //
 // Self-registration for new trades. Creates the auth user + public.users (external_partner) +
 // public.partners row with a 30-day free trial (no card), then emails a 6-digit OTP via Resend so
@@ -12,19 +12,9 @@ import { sendOtpEmail } from "@/lib/email";
 export const dynamic = "force-dynamic";
 
 const TRIAL_DAYS = 30;
-const VALID_TRADES = new Set([
-  "Plumbing",
-  "General Maintenance",
-  "Light Carpentry",
-  "Electrical",
-  "Painting & Decorating",
-  "Tiling",
-  "Plastering",
-  "Flooring",
-]);
 
 export async function POST(req: NextRequest) {
-  let body: { email?: unknown; fullName?: unknown; company?: unknown; trade?: unknown; phone?: unknown };
+  let body: { email?: unknown; fullName?: unknown; company?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -34,13 +24,10 @@ export async function POST(req: NextRequest) {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
   const company = typeof body.company === "string" ? body.company.trim() : "";
-  const trade = typeof body.trade === "string" ? body.trade.trim() : "";
-  const phone = typeof body.phone === "string" ? body.phone.trim() : "";
 
   if (!email || !email.includes("@")) return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
   if (!fullName) return NextResponse.json({ error: "Enter your name." }, { status: 400 });
   if (!company) return NextResponse.json({ error: "Enter your company or trading name." }, { status: 400 });
-  if (!VALID_TRADES.has(trade)) return NextResponse.json({ error: "Pick your primary trade." }, { status: 400 });
 
   const admin = createServiceClient();
 
@@ -85,9 +72,9 @@ export async function POST(req: NextRequest) {
     email,
     company_name: company,
     contact_name: fullName,
-    phone: phone || null,
-    trade,
-    trades: [trade],
+    phone: null,
+    trade: null,
+    trades: [],
     location: "",
     subscription_status: "trialing",
     plan: "pro",

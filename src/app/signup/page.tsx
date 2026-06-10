@@ -11,31 +11,18 @@ import { T } from "@/lib/tokens";
 import { Button, Icon, Input } from "@/components/ui/primitives";
 import { Wordmark } from "@/components/shell/sidebar";
 
-const TRADES = [
-  "Plumbing",
-  "General Maintenance",
-  "Light Carpentry",
-  "Electrical",
-  "Painting & Decorating",
-  "Tiling",
-  "Plastering",
-  "Flooring",
-];
-
 export default function SignupPage() {
   const router = useRouter();
   const [step, setStep] = useState<"details" | "code">("details");
   const [fullName, setFullName] = useState("");
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [trade, setTrade] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [devNote, setDevNote] = useState<string | null>(null);
 
-  const detailsValid = fullName.trim() && company.trim() && email.includes("@") && trade;
+  const detailsValid = fullName.trim() && company.trim() && email.includes("@");
 
   const createAccount = async () => {
     setError(null);
@@ -45,7 +32,7 @@ export default function SignupPage() {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), fullName: fullName.trim(), company: company.trim(), trade, phone: phone.trim() }),
+        body: JSON.stringify({ email: email.trim(), fullName: fullName.trim(), company: company.trim() }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; devCode?: string; emailError?: string };
       if (!res.ok || !data.ok) throw new Error(data.error || "Couldn't create your account.");
@@ -117,17 +104,6 @@ export default function SignupPage() {
               <Input value={fullName} onChange={setFullName} placeholder="Your full name" icon="user" autoFocus size="lg" />
               <Input value={company} onChange={setCompany} placeholder="Company / trading name" icon="briefcase" size="lg" />
               <Input value={email} onChange={setEmail} placeholder="you@example.com" icon="mail" type="email" size="lg" />
-              <Input value={phone} onChange={setPhone} placeholder="Mobile (optional)" icon="phone" type="tel" size="lg" />
-              <select
-                value={trade}
-                onChange={(e) => setTrade(e.target.value)}
-                style={{ height: 42, padding: "0 12px", borderRadius: 8, border: `1px solid ${T.line}`, background: T.white, fontFamily: T.sans, fontSize: 14, color: trade ? T.ink : T.mute }}
-              >
-                <option value="">Your primary trade…</option>
-                {TRADES.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
             </>
           ) : (
             <Input value={code} onChange={setCode} placeholder="6-digit code" icon="lock" autoFocus size="lg" />

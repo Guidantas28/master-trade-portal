@@ -4,20 +4,20 @@
 // Prices persist in partner_service_prices (one row per partner × catalog service).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { serviceMatchesAnyTrade } from "@/lib/trade-match";
+import { catalogPartnerHourlyRate } from "@/lib/catalog-partner-pay";
 import {
   parsePricingAddons,
   parsePricingPresets,
   type ServicePricingAddon,
   type ServicePricingPreset,
 } from "@/lib/catalog-pricing";
+import { serviceMatchesAnyTrade } from "@/lib/trade-match";
 
 interface CatalogRow {
   id: string;
   name: string | null;
   pricing_mode: string | null;
-  fixed_price: number | null;
-  hourly_rate: number | null;
+  partner_cost: number | null;
   default_hours: number | null;
   pricing_presets: unknown;
   pricing_addons: unknown;
@@ -36,9 +36,11 @@ export interface ServicePrice {
   catalogServiceId: string;
   name: string;
   mode: "fixed" | "hourly";
-  standardFixed: number; // = service_catalog.fixed_price — our customer sell price = the partner's ceiling
-  standardHourly: number; // = service_catalog.hourly_rate — hourly sell ceiling
   standardHours: number;
+  /** Catalog partner pay from service_catalog.partner_cost (fixed total or hourly bundle). */
+  standardPayFixed: number;
+  /** Hourly partner rate derived from partner_cost ÷ default_hours. */
+  standardPayHourly: number;
   useStandard: boolean;
   fixedPartnerCost: number | null;
   hourlyPartnerRate: number | null;
@@ -61,7 +63,7 @@ export async function fetchRateCard(supabase: SupabaseClient, partnerId: string,
 
   const { data: cats } = await supabase
     .from("service_catalog")
-    .select("id,name,pricing_mode,fixed_price,hourly_rate,default_hours,pricing_presets,pricing_addons")
+    .select("id,name,pricing_mode,partner_cost,default_hours,pricing_presets,pricing_addons")
     .is("deleted_at", null)
     .eq("is_active", true);
   const matching = ((cats ?? []) as CatalogRow[]).filter((c) => serviceMatchesAnyTrade(c.name ?? "", trades));
@@ -76,14 +78,17 @@ export async function fetchRateCard(supabase: SupabaseClient, partnerId: string,
   return matching
     .map((c) => {
       const p = byCat.get(c.id);
+      const standardHours = c.default_hours ?? 1;
+      const standardPayFixed = c.partner_cost ?? 0;
+      const standardPayHourly = catalogPartnerHourlyRate(c.partner_cost, standardHours);
       return {
         pspId: p?.id ?? null,
         catalogServiceId: c.id,
         name: c.name || "Service",
         mode: (c.pricing_mode === "hourly" ? "hourly" : "fixed") as "fixed" | "hourly",
-        standardFixed: c.fixed_price ?? 0,
-        standardHourly: c.hourly_rate ?? 0,
-        standardHours: c.default_hours ?? 1,
+        standardHours,
+        standardPayFixed,
+        standardPayHourly,
         useStandard: p?.use_standard ?? true,
         fixedPartnerCost: p?.fixed_partner_cost ?? null,
         hourlyPartnerRate: p?.hourly_partner_rate ?? null,

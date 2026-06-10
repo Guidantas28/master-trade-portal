@@ -1,9 +1,8 @@
 "use client";
 
 // Sidebar, TrialCard, UserMiniCard — ported from shell.jsx.
-// The brand logo asset isn't bundled, so the lowercase `fixfy` wordmark is rendered as text.
-
 import { useState, type CSSProperties } from "react";
+import { AuthWordmark, BrandPanelBackground } from "@/components/brand/auth-wordmark";
 import { T } from "@/lib/tokens";
 import { Avatar, Icon } from "@/components/ui/primitives";
 import { usePartner } from "@/components/partner-context";
@@ -135,35 +134,19 @@ export function Sidebar({
   }
 
   return (
-    <aside
+    <BrandPanelBackground
       style={{
         width: 240,
         flex: "0 0 240px",
         height: "100vh",
-        background: T.ink,
         borderRight: `1px solid rgba(255,255,255,0.06)`,
         display: "flex",
         flexDirection: "column",
         padding: "14px 12px 12px",
       }}
     >
-      {/* Logo */}
-      <div style={{ padding: "4px 8px 16px", display: "flex", alignItems: "center", gap: 8 }}>
-        <Wordmark color={T.white} />
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 500,
-            color: "rgba(255,255,255,0.6)",
-            padding: "2px 6px",
-            background: "rgba(255,255,255,0.08)",
-            borderRadius: 4,
-            letterSpacing: 0.4,
-            marginLeft: "auto",
-          }}
-        >
-          TRADE
-        </span>
+      <div style={{ padding: "4px 8px 16px" }}>
+        <AuthWordmark light size={18} />
       </div>
 
       {/* Nav sections */}
@@ -196,7 +179,7 @@ export function Sidebar({
 
       <TrialCard onUpgrade={() => onNav("settings:billing")} />
       <UserMiniCard onOpenOnboarding={onOpenOnboarding} onSettings={() => onNav("settings")} />
-    </aside>
+    </BrandPanelBackground>
   );
 }
 

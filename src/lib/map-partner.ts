@@ -45,8 +45,8 @@ function daysUntil(iso?: string | null): number {
 export function mapPartner(row: PartnerRow): Partner {
   const contact = row.contact_name?.trim() || row.company_name?.trim() || "Partner";
   const [firstName, ...rest] = contact.split(/\s+/);
-  const primary = (row.trade?.trim() || "General Maintenance") as Trade;
-  const enabled = (row.trades && row.trades.length ? row.trades : [primary]) as Trade[];
+  const primary = (row.trade?.trim() || "") as Trade;
+  const enabled = (row.trades && row.trades.length ? row.trades : primary ? [primary] : []) as Trade[];
 
   return {
     id: row.id,

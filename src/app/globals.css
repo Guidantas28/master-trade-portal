@@ -93,3 +93,22 @@ button {
 .fx-fade {
   animation: fx-fade-in 200ms cubic-bezier(0.2, 0, 0, 1);
 }
+
+/* Live indicator (pulsing coral dot) — used by Pulse-style feeds. */
+.fx-live-dot {
+  position: relative;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #ed4b00;
+  flex: 0 0 auto;
+}
+.fx-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  border: 2px solid #ed4b00;
+  animation: fx-pulse 1.6s ease-out infinite;
+}

@@ -1,12 +1,10 @@
 "use client";
 
-// Dashboard — greeting, trial nudge, KPI strip, today's schedule, activity feed, mini cards.
-// Wired to the partner's real jobs (useMyJobs). KPIs/activity/today are derived from those
-// rows; supply-side metrics (new leads, available jobs) return once those tables/screens land.
+// Dashboard — greeting, KPI strip, today's schedule, activity feed, mini cards.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
-import { Badge, Button, Card, Icon, IconButton, StatCard, StatusDot } from "@/components/ui/primitives";
+import { Button, Card, Icon, IconButton, LiveIndicator, StatCard, StatusDot } from "@/components/ui/primitives";
 import { formatGBP } from "@/lib/format";
 import { jobMatchesDateFilter, londonYmd } from "@/lib/date-range-filter";
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter";
@@ -15,12 +13,39 @@ import { usePartner } from "@/components/partner-context";
 import { useMyJobs } from "@/components/jobs-context";
 import { createClient } from "@/lib/supabase/client";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
-import type { ActivityTone, MyJob } from "@/types";
+import { fetchAvailableJobs } from "@/lib/queries/available-jobs";
+import { fetchAvailableQuotes } from "@/lib/queries/quotes";
+import { resolvePartnerMonthlyGoal, revenueGoalProgress } from "@/lib/partner-revenue-goal";
+import type { ActivityTone, AvailableJob, MyJob, QuoteRequest } from "@/types";
+
+const OPPORTUNITY_POLL_MS = 30_000;
 
 function daysAgoYmd(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return londonYmd(d);
+}
+
+function londonMonthStartYmd(): string {
+  const ymd = londonYmd(new Date());
+  return `${ymd.slice(0, 7)}-01`;
+}
+
+function relativeWhen(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" });
+}
+
+interface PortalLead {
+  offerId: string;
+  status: string;
+  title: string;
+  budget: number | null;
+  posted: string | null;
 }
 
 interface DerivedActivity {
@@ -30,6 +55,23 @@ interface DerivedActivity {
   text: string;
   meta?: string;
   when: string;
+  sortKey: string;
+}
+
+interface OpportunitySnapshot {
+  leads: PortalLead[];
+  jobs: AvailableJob[];
+  quotes: QuoteRequest[];
+  loaded: boolean;
+}
+
+function weekCompareLabel(thisWeek: number, lastWeek: number): { text: string; tone: "green" | "coral" | "mute" } {
+  if (lastWeek === 0 && thisWeek === 0) return { text: "Flat vs last week", tone: "mute" };
+  if (lastWeek === 0) return { text: `+${formatGBP(thisWeek)} vs last week`, tone: "green" };
+  const pct = Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
+  if (pct === 0) return { text: "Flat vs last week", tone: "mute" };
+  if (pct > 0) return { text: `+${pct}% vs last week`, tone: "green" };
+  return { text: `${pct}% vs last week`, tone: "coral" };
 }
 
 function greetingWord(): string {
@@ -50,15 +92,37 @@ export function Dashboard({
   const { jobs, loading, error, refresh } = useMyJobs();
   const { value: dateFilter, setValue: setDateFilter, label: dateFilterLabel } = useDateRangeFilter();
 
-  // Real extras the partner context doesn't carry: compliance docs + live trial days.
-  // Best-effort (tolerate missing mig-196 columns) so the dashboard never breaks.
   const [docs, setDocs] = useState<PartnerDoc[] | null>(null);
   const [trialDays, setTrialDays] = useState<number>(partner.trialDaysLeft);
+  const [opps, setOpps] = useState<OpportunitySnapshot>({ leads: [], jobs: [], quotes: [], loaded: false });
+  const [pulseTick, setPulseTick] = useState(0);
+
+  const loadOpportunities = useCallback(async () => {
+    try {
+      const supabase = createClient();
+      const [leadsRes, availJobs, quotes] = await Promise.all([
+        fetch("/api/leads")
+          .then((r) => r.json())
+          .catch(() => ({ leads: [] as PortalLead[] })),
+        fetchAvailableJobs(supabase, partner.id).catch(() => [] as AvailableJob[]),
+        fetchAvailableQuotes(supabase, partner.id).catch(() => [] as QuoteRequest[]),
+      ]);
+      setOpps({
+        leads: (leadsRes.leads ?? []) as PortalLead[],
+        jobs: availJobs,
+        quotes: quotes.filter((q) => q.status === "to-quote"),
+        loaded: true,
+      });
+      setPulseTick(Date.now());
+    } catch {
+      setOpps((prev) => ({ ...prev, loaded: true }));
+    }
+  }, [partner.id]);
 
   useEffect(() => {
     let cancelled = false;
     const supabase = createClient();
-    (async () => {
+    void (async () => {
       try {
         const rows = await fetchPartnerDocuments(supabase, partner.id);
         if (!cancelled) setDocs(rows);
@@ -73,13 +137,19 @@ export function Dashboard({
           setTrialDays(ms > 0 ? Math.ceil(ms / 86_400_000) : 0);
         }
       } catch {
-        /* mig 196 not applied — keep context value */
+        /* mig 196 not applied */
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [partner.id]);
+
+  useEffect(() => {
+    void loadOpportunities();
+    const id = window.setInterval(() => void loadOpportunities(), OPPORTUNITY_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [loadOpportunities]);
 
   const docSummary = useMemo(() => {
     if (!docs) return null;
@@ -90,17 +160,25 @@ export function Dashboard({
 
   const d = useMemo(() => {
     const today = londonYmd();
+    const monthStart = londonMonthStartYmd();
     const filteredJobs = jobs.filter((j) => jobMatchesDateFilter(j, dateFilter));
     const scheduleJobs = filteredJobs
       .filter((j) => j.status !== "completed" && j.status !== "cancelled")
       .sort((a, b) => (a.scheduled ?? "").localeCompare(b.scheduled ?? ""));
 
-    // Rolling 7-day earnings (independent of date chip — headline KPI).
     const trendDays = Array.from({ length: 7 }, (_, i) => daysAgoYmd(6 - i));
     const trend = trendDays.map((day) =>
       jobs.filter((j) => j.status === "completed" && j.completedDate === day).reduce((s, j) => s + j.total, 0),
     );
     const weekEarnings = trend.reduce((s, n) => s + n, 0);
+    const prevTrendDays = Array.from({ length: 7 }, (_, i) => daysAgoYmd(13 - i));
+    const prevTrend = prevTrendDays.map((day) =>
+      jobs.filter((j) => j.status === "completed" && j.completedDate === day).reduce((s, j) => s + j.total, 0),
+    );
+    const lastWeekEarnings = prevTrend.reduce((s, n) => s + n, 0);
+    const monthEarnings = jobs
+      .filter((j) => j.status === "completed" && (j.completedDate ?? "") >= monthStart)
+      .reduce((s, j) => s + j.total, 0);
 
     const active = jobs.filter((j) => j.status === "scheduled" || j.status === "in_progress");
     const awaiting = jobs.filter((j) => j.status === "final_check");
@@ -109,12 +187,19 @@ export function Dashboard({
     const pendingPayout = awaiting.reduce((s, j) => s + j.total, 0);
     const scheduleTotal = scheduleJobs.reduce((s, j) => s + j.total, 0);
     const inProgress = jobs.find((j) => j.status === "in_progress");
+    const monthGoal = resolvePartnerMonthlyGoal(weekEarnings);
+    const goal = revenueGoalProgress(monthEarnings, monthGoal);
 
     return {
       today,
       scheduleJobs,
       trend,
       weekEarnings,
+      lastWeekEarnings,
+      prevTrend,
+      monthEarnings,
+      monthGoal,
+      goal,
       active,
       awaiting,
       completed30,
@@ -125,8 +210,57 @@ export function Dashboard({
     };
   }, [jobs, dateFilter]);
 
-  const activity = useMemo<DerivedActivity[]>(() => {
-    const items: (DerivedActivity & { sortKey: string })[] = [];
+  const oppStats = useMemo(() => {
+    const newLeads = opps.leads.filter((l) => l.status !== "contacted").length;
+    const leadValue = opps.leads.reduce((s, l) => s + (l.budget ?? 0), 0);
+    const jobValue = opps.jobs.reduce((s, j) => s + j.total, 0);
+    const quoteValue = 0;
+    return {
+      newLeads,
+      leadValue,
+      jobValue,
+      quoteValue,
+      totalLive: opps.leads.length + opps.jobs.length + opps.quotes.length,
+    };
+  }, [opps]);
+
+  const pulseFeed = useMemo<DerivedActivity[]>(() => {
+    const items: DerivedActivity[] = [];
+
+    for (const l of opps.leads.slice(0, 4)) {
+      items.push({
+        id: `lead-${l.offerId}`,
+        icon: "sparkles",
+        tone: l.status === "contacted" ? "green" : "coral",
+        text: l.status === "contacted" ? `Lead contacted — ${l.title}` : `New lead — ${l.title}`,
+        meta: l.budget != null ? `${formatGBP(l.budget)} · ${l.status === "contacted" ? "done" : "act now"}` : "Hot enquiry",
+        when: relativeWhen(l.posted),
+        sortKey: l.posted ?? "",
+      });
+    }
+    for (const j of opps.jobs.slice(0, 4)) {
+      items.push({
+        id: `avail-${j.id}`,
+        icon: "zap",
+        tone: "coral",
+        text: `Job up for grabs — ${j.title}`,
+        meta: `${formatGBP(j.total)} · first to accept wins`,
+        when: j.timing,
+        sortKey: j.id,
+      });
+    }
+    for (const q of opps.quotes.slice(0, 4)) {
+      items.push({
+        id: `quote-${q.id}`,
+        icon: "file-text",
+        tone: "amber",
+        text: `Quote to submit — ${q.title}`,
+        meta: q.yourBid != null ? `Your bid ${formatGBP(q.yourBid)} · due ${q.deadline}` : `Due ${q.deadline}`,
+        when: q.deadline,
+        sortKey: q.id,
+      });
+    }
+
     for (const j of jobs) {
       if (!jobMatchesDateFilter(j, dateFilter)) continue;
       if (j.status === "completed" && j.completedDate) {
@@ -161,11 +295,9 @@ export function Dashboard({
         });
       }
     }
-    return items
-      .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
-      .slice(0, 6)
-      .map(({ sortKey: _sortKey, ...rest }) => rest);
-  }, [jobs, dateFilter]);
+
+    return items.sort((a, b) => b.sortKey.localeCompare(a.sortKey)).slice(0, 8);
+  }, [jobs, dateFilter, opps]);
 
   if (loading) {
     return (
@@ -201,6 +333,8 @@ export function Dashboard({
         ? "Tomorrow's schedule"
         : `Schedule · ${dateFilterLabel.toLowerCase()}`;
 
+  const weekCompare = weekCompareLabel(d.weekEarnings, d.lastWeekEarnings);
+
   return (
     <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18, flex: 1, overflow: "auto" }}>
       {/* Greeting + date filter */}
@@ -234,7 +368,88 @@ export function Dashboard({
         )}
       </div>
 
-      {/* Trial nudge banner — only while on trial */}
+      {/* KPI strip — sticky on scroll */}
+      <div
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          paddingBottom: 4,
+          background: T.paper,
+          margin: "-4px -4px 0",
+          padding: "4px 4px 8px",
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 12 }}>
+          <StatCard
+            hero
+            label="This week's earnings"
+            value={formatGBP(d.weekEarnings)}
+            hint="Completed · last 7 days"
+            trend={d.trend}
+            compare={weekCompare}
+            prevTrend={d.prevTrend}
+          />
+          <StatCard
+            label="Active jobs"
+            value={d.active.length}
+            hint="Scheduled + in progress"
+            icon="briefcase"
+            onClick={() => onNav("jobs")}
+          />
+          <StatCard
+            label="Final checks"
+            value={d.awaiting.length}
+            hint={d.pendingPayout > 0 ? `${formatGBP(d.pendingPayout)} pending` : "Nothing pending"}
+            accent="coral"
+            icon="clock"
+            onClick={() => onNav("jobs")}
+          />
+          <StatCard
+            label="Completed"
+            value={d.completed30.length}
+            hint="Last 30 days"
+            icon="circle-check"
+            onClick={() => onNav("jobs")}
+          />
+        </div>
+
+        {/* Gamified strip: month goal + live opportunities */}
+        <Card style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: T.slate, textTransform: "uppercase", letterSpacing: 0.35 }}>
+                Month goal
+              </span>
+              <span style={{ fontSize: 12, color: T.mute, fontFamily: T.mono }}>
+                {formatGBP(d.monthEarnings)} / {formatGBP(d.goal.goal)} · {d.goal.pct}%
+              </span>
+            </div>
+            <div style={{ height: 6, borderRadius: 9999, background: T.paper2, overflow: "hidden" }}>
+              <div
+                style={{
+                  width: `${d.goal.pct}%`,
+                  height: "100%",
+                  borderRadius: 9999,
+                  background: d.goal.hit ? T.green : `linear-gradient(90deg, ${T.coral}, #ff8a4c)`,
+                  transition: "width 400ms ease",
+                }}
+              />
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <LiveIndicator label="Live" />
+            <OppPill icon="sparkles" label="Leads" count={opps.leads.length} hot={oppStats.newLeads > 0} tone="coral" onClick={() => onNav("leads")} />
+            <OppPill icon="zap" label="Jobs" count={opps.jobs.length} hot={opps.jobs.length > 0} tone="navy" onClick={() => onNav("available")} />
+            <OppPill icon="file-text" label="Quotes" count={opps.quotes.length} hot={opps.quotes.length > 0} tone="amber" onClick={() => onNav("quotes")} />
+            <IconButton icon="refresh-cw" size={28} tone="ghost" onClick={() => void loadOpportunities()} />
+          </div>
+        </Card>
+      </div>
+
       {trialDays > 0 && (
         <Card
           style={{
@@ -246,17 +461,7 @@ export function Dashboard({
             background: "linear-gradient(0deg, rgba(196,122,0,0.04), rgba(196,122,0,0.04)), #fff",
           }}
         >
-          <div
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              background: T.amber50,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: T.amber50, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
             <Icon name="zap" size={16} color={T.amber} />
           </div>
           <div style={{ flex: 1 }}>
@@ -268,53 +473,17 @@ export function Dashboard({
               this week on trial. £99/mo keeps it flowing.
             </div>
             <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>
-              That&apos;s <b>0% commission</b> on your completed work.{" "}
-              {trialDays} day{trialDays === 1 ? "" : "s"} left on your trial.
+              That&apos;s <b>0% commission</b> on your completed work. {trialDays} day{trialDays === 1 ? "" : "s"} left on your trial.
             </div>
           </div>
           <Button variant="secondary" size="sm" onClick={() => onNav("settings:billing")}>
             Review plan
           </Button>
-          <IconButton icon="x" size={28} tone="ghost" />
         </Card>
       )}
 
-      {/* KPI strip — all derived from real jobs */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 12 }}>
-        <StatCard
-          hero
-          label="This week's earnings"
-          value={formatGBP(d.weekEarnings)}
-          hint="Completed, last 7 days"
-          trend={d.trend}
-        />
-        <StatCard
-          label="Active jobs"
-          value={d.active.length}
-          hint="Scheduled + in progress"
-          icon="briefcase"
-          onClick={() => onNav("jobs")}
-        />
-        <StatCard
-          label="Final checks"
-          value={d.awaiting.length}
-          hint={d.pendingPayout > 0 ? `${formatGBP(d.pendingPayout)} pending` : "Nothing pending"}
-          accent="coral"
-          icon="clock"
-          onClick={() => onNav("jobs")}
-        />
-        <StatCard
-          label="Completed"
-          value={d.completed30.length}
-          hint="Last 30 days"
-          icon="circle-check"
-          onClick={() => onNav("jobs")}
-        />
-      </div>
-
       {/* Two-column */}
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
-        {/* Today's schedule */}
         <Card>
           <div style={{ padding: "14px 16px", display: "flex", alignItems: "center", borderBottom: `1px solid ${T.line}` }}>
             <div style={{ flex: 1 }}>
@@ -354,28 +523,28 @@ export function Dashboard({
                   <b style={{ color: T.ink, fontWeight: 500 }}>
                     {d.scheduleJobs.length} {d.scheduleJobs.length === 1 ? "job" : "jobs"}
                   </b>{" "}
-                  in this period
+                  · {formatGBP(d.scheduleTotal)}
                 </span>
-                <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 12, color: T.mute, fontFamily: T.mono }}>{formatGBP(d.scheduleTotal)} value</span>
               </div>
             )}
           </div>
         </Card>
 
-        {/* Activity feed */}
         <Card>
           <div style={{ padding: "14px 16px", display: "flex", alignItems: "center", borderBottom: `1px solid ${T.line}` }}>
             <div style={{ flex: 1, fontSize: 15, fontWeight: 500, color: T.navy }}>Activity</div>
-            <Badge tone="coral" dot>
-              Live
-            </Badge>
+            <LiveIndicator />
+            {pulseTick > 0 && (
+              <span style={{ fontSize: 10.5, color: T.mute, fontFamily: T.mono, marginLeft: 8 }}>
+                {relativeWhen(new Date(pulseTick).toISOString())}
+              </span>
+            )}
           </div>
           <div>
-            {activity.map((a, i) => (
-              <ActivityRow key={a.id} a={a} divider={i < activity.length - 1} />
+            {pulseFeed.map((a, i) => (
+              <ActivityRow key={a.id} a={a} divider={i < pulseFeed.length - 1} />
             ))}
-            {activity.length === 0 && (
+            {pulseFeed.length === 0 && (
               <div style={{ padding: 24, color: T.mute, fontSize: 13, textAlign: "center" }}>
                 No recent activity yet.
               </div>
@@ -384,7 +553,7 @@ export function Dashboard({
         </Card>
       </div>
 
-      {/* Footer — three mini cards */}
+      {/* Footer mini cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         <MiniCard
           icon="map-pin"
@@ -412,7 +581,7 @@ export function Dashboard({
               : docSummary.expiringSoon
                 ? `${docSummary.expiringSoon.name}: ${docSummary.expiringSoon.warning}`
                 : docSummary.total === 0
-                  ? "Upload your insurance & certs to get jobs"
+                  ? "Upload insurance & certs to unlock work"
                   : "All documents up to date"
           }
           cta="Manage docs"
@@ -429,6 +598,68 @@ export function Dashboard({
         />
       </div>
     </div>
+  );
+}
+
+function OppPill({
+  icon,
+  label,
+  count,
+  hot,
+  tone,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  count: number;
+  hot?: boolean;
+  tone: "coral" | "navy" | "amber";
+  onClick: () => void;
+}) {
+  const toneMap = {
+    coral: { bg: T.coralTint, fg: T.coral, border: "rgba(237,75,0,0.25)" },
+    navy: { bg: T.paper2, fg: T.navy, border: T.line },
+    amber: { bg: T.amber50, fg: T.amber, border: "rgba(196,122,0,0.25)" },
+  } as const;
+  const t = toneMap[tone];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 12px",
+        borderRadius: 9999,
+        border: `1px solid ${hot ? t.border : T.line}`,
+        background: hot ? t.bg : T.white,
+        cursor: "pointer",
+        fontFamily: T.sans,
+      }}
+    >
+      {hot && <span className="fx-live-dot" />}
+      <Icon name={icon} size={14} color={t.fg} />
+      <span style={{ fontSize: 12.5, fontWeight: 500, color: T.ink }}>{label}</span>
+      <span
+        style={{
+          minWidth: 20,
+          height: 20,
+          padding: "0 6px",
+          borderRadius: 9999,
+          background: count > 0 ? t.fg : T.paper2,
+          color: count > 0 ? T.white : T.mute,
+          fontSize: 11,
+          fontWeight: 600,
+          fontFamily: T.mono,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {count}
+      </span>
+    </button>
   );
 }
 
@@ -499,7 +730,7 @@ function ActivityRow({ a, divider }: { a: DerivedActivity; divider: boolean }) {
   };
   const t = toneMap[a.tone];
   return (
-    <div style={{ display: "flex", gap: 10, padding: "12px 16px", borderBottom: divider ? `1px solid ${T.line}` : "none" }}>
+    <div style={{ display: "flex", gap: 10, padding: "12px 16px", borderBottom: divider ? `1px solid ${T.line}` : "none" }} className="fx-rise">
       <div
         style={{
           width: 26,
