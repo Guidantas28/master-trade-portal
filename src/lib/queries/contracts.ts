@@ -1,8 +1,8 @@
-// Reads the partner's real contracts: the active contract_versions (Terms of Use + Self-bill
-// Agreement) and whether this partner has signed each (partner_contract_signatures).
-// In-portal e-signing isn't wired yet (signature capture), so this surfaces read + status.
+// Reads active partner contracts (Terms of Use, Self-bill, Contractor Service Agreement)
+// and whether this partner has signed each (partner_contract_signatures).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { PARTNER_CONTRACT_TYPES } from "@/lib/partner-contract-types";
 
 interface VersionRow {
   id: string;
@@ -15,6 +15,7 @@ interface SignatureRow {
   contract_type: string;
   contract_version_id: string;
   signed_at: string | null;
+  signature_pdf_url: string | null;
 }
 
 export interface PartnerContract {
@@ -25,6 +26,7 @@ export interface PartnerContract {
   bodyHtml: string;
   signed: boolean;
   signedAt: string | null;
+  signaturePdfUrl: string | null;
 }
 
 const LONDON = "Europe/London";
@@ -35,23 +37,33 @@ function fmt(iso: string | null): string | null {
 
 export async function fetchContracts(supabase: SupabaseClient, partnerId: string): Promise<PartnerContract[]> {
   const [{ data: versions, error: vErr }, { data: sigs, error: sErr }] = await Promise.all([
-    supabase.from("contract_versions").select("id,contract_type,version,title,body_html").eq("is_active", true),
-    supabase.from("partner_contract_signatures").select("contract_type,contract_version_id,signed_at").eq("partner_id", partnerId),
+    supabase
+      .from("contract_versions")
+      .select("id,contract_type,version,title,body_html")
+      .eq("is_active", true)
+      .in("contract_type", [...PARTNER_CONTRACT_TYPES]),
+    supabase
+      .from("partner_contract_signatures")
+      .select("contract_type,contract_version_id,signed_at,signature_pdf_url")
+      .eq("partner_id", partnerId),
   ]);
   if (vErr) throw vErr;
   if (sErr) throw sErr;
 
   const signatures = (sigs as SignatureRow[]) ?? [];
   return ((versions as VersionRow[]) ?? []).map((v) => {
-    const sig = signatures.find((s) => s.contract_version_id === v.id) ?? signatures.find((s) => s.contract_type === v.contract_type);
+    const sig =
+      signatures.find((s) => s.contract_version_id === v.id) ??
+      signatures.find((s) => s.contract_type === v.contract_type);
     return {
       versionId: v.id,
       type: v.contract_type,
-      title: v.title || (v.contract_type === "self_bill_agreement" ? "Self-bill agreement" : "Terms of use"),
+      title: v.title || v.contract_type.replace(/_/g, " "),
       version: v.version || "",
       bodyHtml: v.body_html || "",
       signed: !!sig,
       signedAt: fmt(sig?.signed_at ?? null),
+      signaturePdfUrl: sig?.signature_pdf_url ?? null,
     };
   });
 }

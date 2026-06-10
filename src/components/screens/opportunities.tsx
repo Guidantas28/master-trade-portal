@@ -2,36 +2,38 @@
 
 // Opportunities — Leads, Available jobs, Available quotes. Ported from opportunities.jsx.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
 import {
   Badge,
   Button,
   Card,
   EmptyState,
-  Field,
   Icon,
-  Input,
-  Modal,
   SectionHeader,
   Tabs,
 } from "@/components/ui/primitives";
-import { formatGBP, formatGBPdec } from "@/lib/format";
+import { formatGBP } from "@/lib/format";
 import { usePartner } from "@/components/partner-context";
 import { useMyJobs } from "@/components/jobs-context";
 import { createClient } from "@/lib/supabase/client";
-import { fetchAvailableQuotes, submitBid } from "@/lib/queries/quotes";
-import {
-  bidFormValuesFromNotes,
-  buildBidProposalFromForm,
-  validateBidSubmitForm,
-  type BidSubmitFormValues,
-} from "@/lib/quote-bid-payload";
+import { fetchAvailableQuotes } from "@/lib/queries/quotes";
+import { QuoteDrawer } from "@/components/screens/quote-drawer";
 import { fetchAvailableJobs } from "@/lib/queries/available-jobs";
+import {
+  LEAD_PIPELINE_ACCENTS,
+  LEAD_PIPELINE_LABELS,
+  LEAD_PIPELINE_STATUSES,
+  pipelineBadgeTone,
+  type LeadPipelineStatus,
+} from "@/lib/lead-pipeline";
+
 interface PortalLead {
   offerId: string; // lead id (public.leads)
   reference?: string | null;
   status: string;
+  pipelineStatus?: LeadPipelineStatus | null;
+  contactedAt?: string | null;
   title: string;
   desc: string;
   postcode: string;
@@ -44,6 +46,30 @@ interface PortalLead {
   email?: string | null;
   phone?: string | null;
   address?: string | null;
+  notes?: string | null;
+}
+
+type LeadTab = "new" | "interested";
+type NewLeadView = "list" | "card";
+type InterestedLeadView = "kanban" | "list";
+const DECLINED_STORAGE_KEY = "fixfy-leads-declined";
+
+function loadDeclinedIds(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = localStorage.getItem(DECLINED_STORAGE_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDeclinedIds(ids: Set<string>) {
+  try {
+    localStorage.setItem(DECLINED_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* ignore */
+  }
 }
 import type { AvailableJob, QuoteRequest, QuoteRequestStatus } from "@/types";
 import type { ToastInput } from "@/components/ui/toast";
@@ -54,11 +80,16 @@ type ShowToast = (t: ToastInput) => void;
 // LEADS
 // ============================================================
 export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
-  const partner = usePartner();
   const [leads, setLeads] = useState<PortalLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [pipelineBusyId, setPipelineBusyId] = useState<string | null>(null);
+  const [notesSavingId, setNotesSavingId] = useState<string | null>(null);
+  const [tab, setTab] = useState<LeadTab>("new");
+  const [newView, setNewView] = useState<NewLeadView>("list");
+  const [interestedView, setInterestedView] = useState<InterestedLeadView>("kanban");
+  const [declinedIds, setDeclinedIds] = useState<Set<string>>(() => loadDeclinedIds());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,10 +110,20 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
     void load();
   }, [load]);
 
+  const visibleLeads = useMemo(
+    () => leads.filter((l) => !declinedIds.has(l.offerId)),
+    [leads, declinedIds],
+  );
+  const newLeads = useMemo(() => visibleLeads.filter((l) => l.status !== "contacted"), [visibleLeads]);
+  const interestedLeads = useMemo(() => visibleLeads.filter((l) => l.status === "contacted"), [visibleLeads]);
+  const activeLeads = tab === "new" ? newLeads : interestedLeads;
+
   const act = async (lead: PortalLead, status: "contacted" | "declined") => {
-    // Decline isn't stored (no column on lead_partner_offers) — just hide it locally.
     if (status === "declined") {
-      setLeads((prev) => prev.filter((l) => l.offerId !== lead.offerId));
+      const next = new Set(declinedIds);
+      next.add(lead.offerId);
+      setDeclinedIds(next);
+      saveDeclinedIds(next);
       onShowToast({ icon: "x", text: "Lead declined." });
       return;
     }
@@ -99,10 +140,20 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
       setLeads((prev) =>
         prev.map((l) =>
           l.offerId === lead.offerId
-            ? { ...l, status: "contacted", contactedCount: l.contactedCount + 1, email: contact.email, phone: contact.phone, address: contact.address }
+            ? {
+                ...l,
+                status: "contacted",
+                pipelineStatus: "contacted",
+                contactedAt: new Date().toISOString(),
+                contactedCount: l.contactedCount + 1,
+                email: contact.email,
+                phone: contact.phone,
+                address: contact.address,
+              }
             : l,
         ),
       );
+      setTab("interested");
       onShowToast({ icon: "phone", text: "Customer details unlocked — reach out now." });
     } catch (e) {
       onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't update lead" });
@@ -111,17 +162,88 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
     }
   };
 
+  const saveNotes = async (lead: PortalLead, notes: string) => {
+    setNotesSavingId(lead.offerId);
+    try {
+      const res = await fetch("/api/leads/notes", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.offerId, notes }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't save notes");
+      const trimmed = notes.trim() || null;
+      setLeads((prev) =>
+        prev.map((l) => (l.offerId === lead.offerId ? { ...l, notes: trimmed } : l)),
+      );
+    } catch (e) {
+      onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't save notes" });
+      throw e;
+    } finally {
+      setNotesSavingId(null);
+    }
+  };
+
+  const updatePipeline = async (lead: PortalLead, pipelineStatus: LeadPipelineStatus) => {
+    setPipelineBusyId(lead.offerId);
+    try {
+      const res = await fetch("/api/leads/pipeline", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.offerId, pipelineStatus }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't update status");
+      setLeads((prev) =>
+        prev.map((l) => (l.offerId === lead.offerId ? { ...l, pipelineStatus } : l)),
+      );
+      onShowToast({ icon: "check", text: `Marked as ${LEAD_PIPELINE_LABELS[pipelineStatus]}` });
+    } catch (e) {
+      onShowToast({ icon: "alert-triangle", tone: "coral", text: e instanceof Error ? e.message : "Couldn't update status" });
+    } finally {
+      setPipelineBusyId(null);
+    }
+  };
+
+  const viewTabs =
+    tab === "interested"
+      ? [
+          { id: "kanban", label: "Board", icon: "columns-3" },
+          { id: "list", label: "List", icon: "list" },
+        ]
+      : [
+          { id: "list", label: "List", icon: "list" },
+          { id: "card", label: "Cards", icon: "layout-grid" },
+        ];
+  const activeView = tab === "interested" ? interestedView : newView;
+  const setActiveView = (id: string) => {
+    if (tab === "interested") setInterestedView(id as InterestedLeadView);
+    else setNewView(id as NewLeadView);
+  };
+
+  const leadTabs = [
+    { id: "new", label: "New", icon: "user-plus", count: newLeads.length || undefined },
+    { id: "interested", label: "Interested", icon: "phone", count: interestedLeads.length || undefined },
+  ];
+
   return (
-    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18, flex: 1, overflow: "auto" }}>
+    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, flex: 1, overflow: "auto" }}>
       <SectionHeader
         title="Leads"
         subtitle="Customer enquiries Fixfy has sent your way. Reach out fast — first contact wins the work."
         actions={
-          <Button variant="secondary" size="sm" icon="refresh-cw" onClick={load}>
-            Refresh
-          </Button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <Tabs tabs={viewTabs} active={activeView} onChange={setActiveView} variant="pills" />
+            <Button variant="secondary" size="sm" icon="refresh-cw" onClick={load}>
+              Refresh
+            </Button>
+          </div>
         }
       />
+
+      {!loading && !error && visibleLeads.length > 0 && (
+        <Tabs tabs={leadTabs} active={tab} onChange={(id) => setTab(id as LeadTab)} variant="pills" />
+      )}
 
       {loading ? (
         <div style={{ padding: 8, color: T.mute, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
@@ -134,19 +256,73 @@ export function LeadsView({ onShowToast }: { onShowToast: ShowToast }) {
             Retry
           </Button>
         </div>
-      ) : leads.length === 0 ? (
-        <EmptyState icon="sparkles" title="No leads right now" hint="When Fixfy sends a customer enquiry your way, it'll appear here to act on." />
+      ) : visibleLeads.length === 0 ? (
+        <EmptyState icon="user-plus" title="No leads right now" hint="When Fixfy sends a customer enquiry your way, it'll appear here to act on." />
+      ) : activeLeads.length === 0 ? (
+        <EmptyState
+          icon={tab === "new" ? "user-plus" : "phone"}
+          title={tab === "new" ? "No new leads" : "No interested leads yet"}
+          hint={
+            tab === "new"
+              ? "You're all caught up. Check Interested for leads you've already unlocked."
+              : "Contact a new lead to reveal customer details and track progress here."
+          }
+        />
       ) : (
         <>
           <div style={{ fontSize: 12.5, color: T.mute }}>
-            <b style={{ color: T.ink, fontWeight: 500 }}>{leads.length}</b> {leads.length === 1 ? "lead" : "leads"} ·{" "}
-            <b style={{ color: T.coral, fontWeight: 500 }}>{leads.filter((l) => l.status !== "contacted").length}</b> awaiting your contact
+            <b style={{ color: T.ink, fontWeight: 500 }}>{activeLeads.length}</b>{" "}
+            {tab === "new" ? (activeLeads.length === 1 ? "new lead" : "new leads") : activeLeads.length === 1 ? "interested lead" : "interested leads"}
+            {tab === "new" && interestedLeads.length > 0 && (
+              <>
+                {" "}
+                · <b style={{ color: T.navy, fontWeight: 500 }}>{interestedLeads.length}</b> in Interested
+              </>
+            )}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-            {leads.map((l) => (
-              <LeadCard key={l.offerId} lead={l} busy={busyId === l.offerId} onContact={() => act(l, "contacted")} onDecline={() => act(l, "declined")} />
-            ))}
-          </div>
+          {tab === "interested" && interestedView === "kanban" ? (
+            <LeadKanbanBoard
+              leads={interestedLeads}
+              pipelineBusyId={pipelineBusyId}
+              notesSavingId={notesSavingId}
+              onPipelineChange={updatePipeline}
+              onNotesSave={saveNotes}
+            />
+          ) : activeView === "list" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {activeLeads.map((l) => (
+                <LeadListRow
+                  key={l.offerId}
+                  lead={l}
+                  tab={tab}
+                  busy={busyId === l.offerId}
+                  pipelineBusy={pipelineBusyId === l.offerId}
+                  notesSaving={notesSavingId === l.offerId}
+                  onContact={() => act(l, "contacted")}
+                  onDecline={() => act(l, "declined")}
+                  onPipelineChange={(s) => updatePipeline(l, s)}
+                  onNotesSave={(notes) => saveNotes(l, notes)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
+              {activeLeads.map((l) => (
+                <LeadCardCompact
+                  key={l.offerId}
+                  lead={l}
+                  tab={tab}
+                  busy={busyId === l.offerId}
+                  pipelineBusy={pipelineBusyId === l.offerId}
+                  notesSaving={notesSavingId === l.offerId}
+                  onContact={() => act(l, "contacted")}
+                  onDecline={() => act(l, "declined")}
+                  onPipelineChange={(s) => updatePipeline(l, s)}
+                  onNotesSave={(notes) => saveNotes(l, notes)}
+                />
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -193,119 +369,488 @@ function leadPosted(iso: string | null): string {
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-function LeadCard({ lead, busy, onContact, onDecline }: { lead: PortalLead; busy: boolean; onContact: () => void; onDecline: () => void }) {
+function PipelineStatusPicker({
+  value,
+  busy,
+  onChange,
+  compact,
+}: {
+  value: LeadPipelineStatus;
+  busy: boolean;
+  onChange: (s: LeadPipelineStatus) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", gap: compact ? 4 : 6, flexWrap: "wrap" }}>
+      {LEAD_PIPELINE_STATUSES.map((s) => {
+        const active = value === s;
+        return (
+          <button
+            key={s}
+            type="button"
+            disabled={busy}
+            onClick={() => onChange(s)}
+            style={{
+              padding: compact ? "4px 8px" : "5px 10px",
+              borderRadius: 6,
+              border: `1px solid ${active ? T.navy : T.line}`,
+              background: active ? T.navy : T.white,
+              color: active ? T.white : T.slate,
+              fontFamily: T.sans,
+              fontSize: compact ? 11 : 11.5,
+              fontWeight: active ? 600 : 400,
+              cursor: busy ? "wait" : "pointer",
+              opacity: busy ? 0.7 : 1,
+            }}
+          >
+            {LEAD_PIPELINE_LABELS[s]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LeadNotesField({
+  value,
+  saving,
+  onSave,
+  compact,
+}: {
+  value: string;
+  saving: boolean;
+  onSave: (notes: string) => Promise<void>;
+  compact?: boolean;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const persist = async () => {
+    if (draft === value) return;
+    try {
+      await onSave(draft);
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 1500);
+    } catch {
+      setDraft(value);
+    }
+  };
+
+  return (
+    <div
+      data-lead-notes
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{ display: "flex", flexDirection: "column", gap: 4 }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 10.5, color: T.mute, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <Icon name="file-text" size={11} /> Notes
+        </span>
+        {(saving || savedFlash) && (
+          <span style={{ fontSize: 10.5, color: saving ? T.mute : T.green }}>
+            {saving ? "Saving…" : "Saved"}
+          </span>
+        )}
+      </div>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void persist()}
+        placeholder="Call notes, follow-up reminders…"
+        rows={compact ? 2 : 3}
+        style={{
+          width: "100%",
+          resize: "vertical",
+          minHeight: compact ? 52 : 64,
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: `1px solid ${T.line}`,
+          background: T.paper,
+          fontFamily: T.sans,
+          fontSize: 12,
+          lineHeight: 1.45,
+          color: T.ink,
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </div>
+  );
+}
+
+function LeadContactStrip({ lead, inline }: { lead: PortalLead; inline?: boolean }) {
+  if (!lead.phone && !lead.email) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: inline ? 10 : 8, flexWrap: "wrap" }}>
+      {lead.phone && (
+        <a href={`tel:${lead.phone}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 500, color: T.ink, textDecoration: "none" }}>
+          <Icon name="phone" size={12} color={T.green} /> {lead.phone}
+        </a>
+      )}
+      {lead.email && (
+        <a href={`mailto:${lead.email}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: T.slate, textDecoration: "none" }}>
+          <Icon name="mail" size={12} color={T.coral} /> {lead.email}
+        </a>
+      )}
+    </div>
+  );
+}
+
+function LeadKanbanBoard({
+  leads,
+  pipelineBusyId,
+  notesSavingId,
+  onPipelineChange,
+  onNotesSave,
+}: {
+  leads: PortalLead[];
+  pipelineBusyId: string | null;
+  notesSavingId: string | null;
+  onPipelineChange: (lead: PortalLead, status: LeadPipelineStatus) => void;
+  onNotesSave: (lead: PortalLead, notes: string) => Promise<void>;
+}) {
+  const [dragLeadId, setDragLeadId] = useState<string | null>(null);
+  const [dropColumn, setDropColumn] = useState<LeadPipelineStatus | null>(null);
+
+  const byStatus = (status: LeadPipelineStatus) =>
+    leads.filter((l) => (l.pipelineStatus ?? "contacted") === status);
+
+  const handleDrop = (status: LeadPipelineStatus) => {
+    const lead = leads.find((l) => l.offerId === dragLeadId);
+    setDragLeadId(null);
+    setDropColumn(null);
+    if (!lead || (lead.pipelineStatus ?? "contacted") === status) return;
+    onPipelineChange(lead, status);
+  };
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, minmax(200px, 1fr))",
+        gap: 10,
+        flex: 1,
+        minHeight: 360,
+        overflowX: "auto",
+      }}
+    >
+      {LEAD_PIPELINE_STATUSES.map((status) => {
+        const items = byStatus(status);
+        const highlight = dropColumn === status;
+        return (
+          <div
+            key={status}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDropColumn(status);
+            }}
+            onDragLeave={() => setDropColumn((c) => (c === status ? null : c))}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleDrop(status);
+            }}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              minWidth: 200,
+              background: highlight ? T.paper2 : T.paper,
+              borderRadius: 12,
+              border: `1.5px solid ${highlight ? T.navy : T.line}`,
+              transition: `border-color 120ms ${T.ease}`,
+            }}
+          >
+            <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${T.line}` }}>
+              <span style={{ width: 8, height: 8, borderRadius: 9999, background: LEAD_PIPELINE_ACCENTS[status], flexShrink: 0 }} />
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{LEAD_PIPELINE_LABELS[status]}</span>
+              <span
+                style={{
+                  fontFamily: T.mono,
+                  fontSize: 10.5,
+                  padding: "1px 6px",
+                  borderRadius: 9999,
+                  background: T.white,
+                  color: T.slate,
+                  border: `1px solid ${T.line}`,
+                }}
+              >
+                {items.length}
+              </span>
+            </div>
+            <div style={{ padding: 8, overflow: "auto", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+              {items.map((lead) => (
+                <LeadKanbanCard
+                  key={lead.offerId}
+                  lead={lead}
+                  busy={pipelineBusyId === lead.offerId}
+                  notesSaving={notesSavingId === lead.offerId}
+                  dragging={dragLeadId === lead.offerId}
+                  onDragStart={() => setDragLeadId(lead.offerId)}
+                  onDragEnd={() => {
+                    setDragLeadId(null);
+                    setDropColumn(null);
+                  }}
+                  onPipelineChange={(s) => onPipelineChange(lead, s)}
+                  onNotesSave={(notes) => onNotesSave(lead, notes)}
+                />
+              ))}
+              {items.length === 0 && (
+                <div
+                  style={{
+                    padding: 16,
+                    fontSize: 11.5,
+                    color: T.mute,
+                    textAlign: "center",
+                    border: `1.5px dashed ${T.line}`,
+                    borderRadius: 8,
+                  }}
+                >
+                  Drop leads here
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LeadKanbanCard({
+  lead,
+  busy,
+  notesSaving,
+  dragging,
+  onDragStart,
+  onDragEnd,
+  onPipelineChange,
+  onNotesSave,
+}: {
+  lead: PortalLead;
+  busy: boolean;
+  notesSaving: boolean;
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onPipelineChange: (s: LeadPipelineStatus) => void;
+  onNotesSave: (notes: string) => Promise<void>;
+}) {
+  const [h, setH] = useState(false);
+  const timing = leadTiming(lead.priority, lead.requestKind);
+  const pipeline = lead.pipelineStatus ?? "contacted";
+
+  return (
+    <div
+      draggable={!busy}
+      onDragStart={(e) => {
+        onDragStart();
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onDragEnd={onDragEnd}
+      onMouseEnter={() => setH(true)}
+      onMouseLeave={() => setH(false)}
+      style={{
+        background: T.white,
+        border: `1px solid ${h ? T.lineStrong : T.line}`,
+        borderRadius: 10,
+        padding: 10,
+        cursor: busy ? "wait" : "grab",
+        opacity: dragging ? 0.45 : busy ? 0.7 : 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        boxShadow: h ? "0 1px 3px rgba(2,0,64,0.08)" : "none",
+        transition: `box-shadow 120ms ${T.ease}`,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+        <Badge tone={timing.emergency ? "coral" : "soft"} size="sm">{timing.label}</Badge>
+        {lead.reference && <span style={{ fontSize: 10, color: T.mute, fontFamily: T.mono }}>{lead.reference}</span>}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, lineHeight: 1.35 }}>{lead.title}</div>
+      {lead.desc && (
+        <div style={{ fontSize: 11.5, color: T.slate, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+          {lead.desc}
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: T.mute, display: "flex", alignItems: "center", gap: 4 }}>
+        <Icon name="map-pin" size={10} /> {lead.postcode || "—"}
+      </div>
+      <LeadContactStrip lead={lead} />
+      <LeadNotesField value={lead.notes ?? ""} saving={notesSaving} onSave={onNotesSave} compact />
+      <div style={{ paddingTop: 6, borderTop: `1px solid ${T.line}` }}>
+        <PipelineStatusPicker value={pipeline} busy={busy} onChange={onPipelineChange} compact />
+      </div>
+    </div>
+  );
+}
+
+function LeadListRow({
+  lead,
+  tab,
+  busy,
+  pipelineBusy,
+  notesSaving,
+  onContact,
+  onDecline,
+  onPipelineChange,
+  onNotesSave,
+}: {
+  lead: PortalLead;
+  tab: LeadTab;
+  busy: boolean;
+  pipelineBusy: boolean;
+  notesSaving: boolean;
+  onContact: () => void;
+  onDecline: () => void;
+  onPipelineChange: (s: LeadPipelineStatus) => void;
+  onNotesSave: (notes: string) => Promise<void>;
+}) {
   const contacted = lead.status === "contacted";
   const timing = leadTiming(lead.priority, lead.requestKind);
   const slotsLeft = Math.max(0, lead.maxContacts - lead.contactedCount);
+  const pipeline = lead.pipelineStatus ?? "contacted";
+
   return (
-    <Card hover style={{ padding: 0, position: "relative", overflow: "hidden" }}>
-      <div style={{ padding: 16, paddingBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <Badge tone={timing.emergency ? "coral" : "soft"} size="sm">{timing.label}</Badge>
-          {lead.reference && <span style={{ fontSize: 11, color: T.mute, fontFamily: T.mono }}>{lead.reference}</span>}
-          {lead.posted && <span style={{ fontSize: 11.5, color: T.mute }}>Sent {leadPosted(lead.posted)}</span>}
-          {contacted && (
-            <Badge tone="success" size="sm" icon="check">You contacted</Badge>
+    <Card style={{ padding: "12px 14px" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+            {tab === "new" && <Badge tone="coral" size="sm">New</Badge>}
+            <Badge tone={timing.emergency ? "coral" : "soft"} size="sm">{timing.label}</Badge>
+            {lead.reference && <span style={{ fontSize: 10.5, color: T.mute, fontFamily: T.mono }}>{lead.reference}</span>}
+            {lead.posted && <span style={{ fontSize: 11, color: T.mute }}>{leadPosted(lead.posted)}</span>}
+            {contacted && (
+              <Badge tone={pipelineBadgeTone(pipeline)} size="sm">
+                {LEAD_PIPELINE_LABELS[pipeline]}
+              </Badge>
+            )}
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, lineHeight: 1.35 }}>{lead.title}</div>
+          {lead.desc && (
+            <div style={{ fontSize: 12.5, color: T.slate, marginTop: 3, lineHeight: 1.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {lead.desc}
+            </div>
           )}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, fontSize: 12, color: T.mute, flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Icon name="map-pin" size={11} /> {lead.postcode || "—"}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Icon name="banknote" size={11} /> {lead.budget != null ? formatGBP(lead.budget) : "Not stated"}
+            </span>
+            <span style={{ fontFamily: T.mono }}>{lead.contactedCount}/{lead.maxContacts} contacted</span>
+          </div>
+          {tab === "interested" && <div style={{ marginTop: 8 }}><LeadContactStrip lead={lead} inline /></div>}
         </div>
 
-        <div style={{ fontSize: 15, fontWeight: 500, color: T.ink, lineHeight: 1.4 }}>{lead.title}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {tab === "new" ? (
+            <>
+              <Button variant="ghost" size="sm" onClick={onDecline} disabled={busy}>Decline</Button>
+              <Button variant="primary" size="sm" icon="phone" onClick={onContact} disabled={busy}>
+                {busy ? "…" : "Contact"}
+              </Button>
+            </>
+          ) : (
+            <span style={{ fontSize: 11.5, color: T.mute }}>{slotsLeft} slot{slotsLeft === 1 ? "" : "s"} left</span>
+          )}
+        </div>
+      </div>
+
+      {tab === "interested" && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.line}`, display: "flex", flexDirection: "column", gap: 10 }}>
+          <LeadNotesField value={lead.notes ?? ""} saving={notesSaving} onSave={onNotesSave} />
+          <div>
+            <div style={{ fontSize: 10.5, color: T.mute, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
+              Pipeline
+            </div>
+            <PipelineStatusPicker value={pipeline} busy={pipelineBusy} onChange={onPipelineChange} compact />
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function LeadCardCompact({
+  lead,
+  tab,
+  busy,
+  pipelineBusy,
+  notesSaving,
+  onContact,
+  onDecline,
+  onPipelineChange,
+  onNotesSave,
+}: {
+  lead: PortalLead;
+  tab: LeadTab;
+  busy: boolean;
+  pipelineBusy: boolean;
+  notesSaving: boolean;
+  onContact: () => void;
+  onDecline: () => void;
+  onPipelineChange: (s: LeadPipelineStatus) => void;
+  onNotesSave: (notes: string) => Promise<void>;
+}) {
+  const contacted = lead.status === "contacted";
+  const timing = leadTiming(lead.priority, lead.requestKind);
+  const slotsLeft = Math.max(0, lead.maxContacts - lead.contactedCount);
+  const pipeline = lead.pipelineStatus ?? "contacted";
+
+  return (
+    <Card hover style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {tab === "new" && <Badge tone="coral" size="sm">New</Badge>}
+        <Badge tone={timing.emergency ? "coral" : "soft"} size="sm">{timing.label}</Badge>
+        {lead.reference && <span style={{ fontSize: 10.5, color: T.mute, fontFamily: T.mono }}>{lead.reference}</span>}
+        {contacted && <Badge tone={pipelineBadgeTone(pipeline)} size="sm">{LEAD_PIPELINE_LABELS[pipeline]}</Badge>}
+      </div>
+
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, lineHeight: 1.35 }}>{lead.title}</div>
         {lead.desc && (
-          <div
-            style={{
-              fontSize: 13,
-              color: T.slate,
-              marginTop: 6,
-              lineHeight: 1.5,
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-          >
+          <div style={{ fontSize: 12, color: T.slate, marginTop: 4, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
             {lead.desc}
           </div>
         )}
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2, 1fr)",
-            gap: 12,
-            marginTop: 14,
-            paddingTop: 12,
-            borderTop: `1px solid ${T.line}`,
-          }}
-        >
-          <MetaItem icon="map-pin" label="Location" value={lead.postcode || "—"} />
-          <MetaItem icon="banknote" label="Budget" value={lead.budget != null ? formatGBP(lead.budget) : "Not stated"} />
-        </div>
-
-        {contacted && (lead.phone || lead.email || lead.address) && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 10,
-              background: T.paper,
-              border: `1px solid ${T.line}`,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div style={{ fontSize: 11, color: T.mute, display: "flex", alignItems: "center", gap: 5 }}>
-              <Icon name="user" size={11} /> Customer contact
-            </div>
-            {lead.phone && (
-              <a href={`tel:${lead.phone}`} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 500, color: T.ink, textDecoration: "none" }}>
-                <Icon name="phone" size={13} color={T.green} /> {lead.phone}
-              </a>
-            )}
-            {lead.email && (
-              <a href={`mailto:${lead.email}`} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: T.ink, textDecoration: "none", wordBreak: "break-all" }}>
-                <Icon name="mail" size={13} color={T.coral} /> {lead.email}
-              </a>
-            )}
-            {lead.address && (
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: T.slate }}>
-                <Icon name="map-pin" size={13} color={T.mute} /> {lead.address}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* Competition strip — closes once maxContacts trades reach out */}
-      <div style={{ padding: "10px 16px", background: T.paper, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "flex", gap: 3, flex: 1 }}>
-          {Array.from({ length: lead.maxContacts }).map((_, i) => (
-            <div key={i} style={{ flex: 1, height: 4, borderRadius: 9999, background: i < lead.contactedCount ? T.coral : T.line }} />
-          ))}
-        </div>
-        <div style={{ fontSize: 11.5, color: T.mute, fontFamily: T.mono, whiteSpace: "nowrap" }}>
-          {lead.contactedCount}/{lead.maxContacts} contacted
-        </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+        <MetaItem icon="map-pin" label="Location" value={lead.postcode || "—"} />
+        <MetaItem icon="banknote" label="Budget" value={lead.budget != null ? formatGBP(lead.budget) : "Not stated"} />
       </div>
 
-      {/* Action row */}
-      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${T.line}` }}>
-        {contacted ? (
-          <div style={{ flex: 1, fontSize: 12, color: T.slate, display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Icon name="phone" size={12} color={T.green} /> You reached out. {slotsLeft} slot{slotsLeft === 1 ? "" : "s"} left.
-          </div>
-        ) : (
-          <>
-            <div style={{ flex: 1, fontSize: 12, color: T.mute }}>{slotsLeft} of {lead.maxContacts} contact slots left · first-come.</div>
-            <Button variant="ghost" size="sm" onClick={onDecline} disabled={busy}>
-              Decline
-            </Button>
-            <Button variant="primary" size="sm" icon="phone" onClick={onContact} disabled={busy}>
-              {busy ? "…" : "Contact customer"}
-            </Button>
-          </>
-        )}
+      <div style={{ display: "flex", gap: 3 }}>
+        {Array.from({ length: lead.maxContacts }).map((_, i) => (
+          <div key={i} style={{ flex: 1, height: 3, borderRadius: 9999, background: i < lead.contactedCount ? T.coral : T.line }} />
+        ))}
       </div>
+
+      {tab === "interested" && (
+        <>
+          <LeadContactStrip lead={lead} />
+          <LeadNotesField value={lead.notes ?? ""} saving={notesSaving} onSave={onNotesSave} compact />
+          <PipelineStatusPicker value={pipeline} busy={pipelineBusy} onChange={onPipelineChange} compact />
+        </>
+      )}
+
+      {tab === "new" ? (
+        <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+          <Button variant="ghost" size="sm" onClick={onDecline} disabled={busy} style={{ flex: 1 }}>Decline</Button>
+          <Button variant="primary" size="sm" icon="phone" onClick={onContact} disabled={busy} style={{ flex: 1 }}>
+            {busy ? "…" : "Contact"}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11.5, color: T.mute }}>{slotsLeft} contact slot{slotsLeft === 1 ? "" : "s"} remaining</div>
+      )}
     </Card>
   );
 }
@@ -540,7 +1085,7 @@ function AvailableJobCard({ job, accepting, onAccept }: { job: AvailableJob; acc
 export function AvailableQuotesView({ onShowToast }: { onShowToast: ShowToast }) {
   const partner = usePartner();
   const [tab, setTab] = useState<QuoteRequestStatus>("to-quote");
-  const [submitFor, setSubmitFor] = useState<QuoteRequest | null>(null);
+  const [drawerQuote, setDrawerQuote] = useState<QuoteRequest | null>(null);
   const [quotes, setQuotes] = useState<QuoteRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -607,305 +1152,83 @@ export function AvailableQuotesView({ onShowToast }: { onShowToast: ShowToast })
             }
           />
         ) : (
-          segments[tab].map((q) => <QuoteRow key={q.id} q={q} status={tab} onSubmit={() => setSubmitFor(q)} />)
+          segments[tab].map((q) => (
+            <QuoteRow key={q.id} q={q} status={tab} onOpen={() => setDrawerQuote(q)} />
+          ))
         )}
       </div>
 
-      {submitFor && (
-        <SubmitQuoteModal
-          quote={submitFor}
-          partnerName={partner.tradingName || `${partner.firstName} ${partner.lastName}`.trim()}
+      {drawerQuote && (
+        <QuoteDrawer
+          quote={drawerQuote}
+          listStatus={drawerQuote.status}
           partnerId={partner.id}
-          onClose={() => setSubmitFor(null)}
-          onSubmitted={() => {
-            setSubmitFor(null);
-            onShowToast({ icon: "send", text: "Quote submitted. We'll notify you the moment the customer decides." });
+          partnerName={partner.tradingName || `${partner.firstName} ${partner.lastName}`.trim()}
+          onClose={() => setDrawerQuote(null)}
+          onShowToast={onShowToast}
+          onChanged={() => {
+            setDrawerQuote(null);
             void load();
           }}
-          onError={(msg) => onShowToast({ icon: "alert-triangle", tone: "coral", text: msg })}
         />
       )}
     </div>
   );
 }
 
-function QuoteRow({ q, status, onSubmit }: { q: QuoteRequest; status: QuoteRequestStatus; onSubmit: () => void }) {
+function QuoteRow({ q, status, onOpen }: { q: QuoteRequest; status: QuoteRequestStatus; onOpen: () => void }) {
+  const serviceType = q.serviceType || q.trades[0] || q.title;
+  const address = q.propertyAddress || q.postcode || "—";
+
   return (
-    <Card style={{ padding: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 16, alignItems: "flex-start" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <span className="fx-mono" style={{ fontSize: 11, color: T.mute }}>
-              {q.reference ?? q.id.slice(0, 8)}
-            </span>
-            {q.trades.map((t) => (
-              <Badge key={t} tone="soft" size="sm">{t}</Badge>
-            ))}
+    <Card hover style={{ padding: "12px 14px", cursor: "pointer" }} onClick={onOpen}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+            <span className="fx-mono" style={{ fontSize: 10.5, color: T.mute }}>{q.reference ?? q.id.slice(0, 8)}</span>
+            {status === "to-quote" && <Badge tone="coral" size="sm">New</Badge>}
+            {status === "submitted" && <Badge tone="warning" size="sm">Submitted</Badge>}
+            {status === "won" && <Badge tone="success" size="sm">Won</Badge>}
           </div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: T.ink }}>{q.title}</div>
-          <div style={{ fontSize: 13, color: T.slate, marginTop: 6, lineHeight: 1.5 }}>{q.desc}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 10, fontSize: 12, color: T.mute }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, lineHeight: 1.35 }}>{q.title}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", marginTop: 8, fontSize: 12, color: T.slate }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <Icon name="map-pin" size={12} /> {q.postcode} · <span className="fx-mono">{q.distance} mi</span>
+              <Icon name="wrench" size={11} color={T.mute} />
+              <span style={{ color: T.mute }}>Type</span> {serviceType}
             </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <Icon name="calendar" size={12} /> Deadline {q.deadline}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+              <Icon name="map-pin" size={11} color={T.mute} />
+              <span style={{ color: T.mute }}>Address</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 280 }}>{address}</span>
             </span>
           </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, minWidth: 200 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
           {status === "submitted" && q.yourBid != null && (
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, color: T.mute, marginBottom: 2 }}>YOUR BID</div>
-              <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 500, color: T.navy }}>{formatGBP(q.yourBid)}</div>
-              <div style={{ fontSize: 11, color: T.mute, marginTop: 2 }}>Submitted — awaiting decision</div>
+              <div style={{ fontSize: 10, color: T.mute, marginBottom: 2 }}>YOUR BID</div>
+              <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 600, color: T.navy }}>{formatGBP(q.yourBid)}</div>
             </div>
           )}
           {status === "won" && q.awardedAmount != null && (
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, color: T.green, marginBottom: 2, fontWeight: 600, letterSpacing: 0.4 }}>WON</div>
-              <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 500, color: T.navy }}>
-                {formatGBP(q.awardedAmount)}
-              </div>
+              <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 600, color: T.green }}>{formatGBP(q.awardedAmount)}</div>
             </div>
           )}
-          <div style={{ display: "flex", gap: 8 }}>
-            {status === "to-quote" && (
-              <>
-                <Button variant="secondary" size="sm" icon="calendar">Book visit</Button>
-                <Button variant="primary" size="sm" icon="send" onClick={onSubmit}>Submit quote</Button>
-              </>
-            )}
-            {status === "submitted" && (
-              <>
-                <Button variant="secondary" size="sm">Withdraw</Button>
-                <Button variant="dark" size="sm" icon="pencil" onClick={onSubmit}>Update bid</Button>
-              </>
-            )}
-            {status === "won" && <Button variant="primary" size="sm" icon="arrow-right">Open job</Button>}
-          </div>
+          {status === "to-quote" && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <Button variant="primary" size="sm" icon="send" onClick={onOpen}>Submit quote</Button>
+            </div>
+          )}
+          {status === "submitted" && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <Button variant="secondary" size="sm" icon="pencil" onClick={onOpen}>Update</Button>
+            </div>
+          )}
+          <Icon name="chevron-right" size={16} color={T.mute} />
         </div>
       </div>
     </Card>
-  );
-}
-
-function SubmitQuoteModal({
-  quote,
-  partnerName,
-  partnerId,
-  onClose,
-  onSubmitted,
-  onError,
-}: {
-  quote: QuoteRequest;
-  partnerName: string;
-  partnerId: string;
-  onClose: () => void;
-  onSubmitted: () => void;
-  onError: (msg: string) => void;
-}) {
-  const isUpdate = quote.status === "submitted";
-  const initial = bidFormValuesFromNotes(quote.myBidNotes);
-  const [labour, setLabour] = useState(initial.labourCost ?? "");
-  const [materials, setMaterials] = useState(initial.materialsCost ?? "");
-  const [labourNotes, setLabourNotes] = useState(initial.labourDescription ?? "");
-  const [materialsNotes, setMaterialsNotes] = useState(initial.materialsDescription ?? "");
-  const [scope, setScope] = useState(initial.scope ?? "");
-  const [startDate1, setStartDate1] = useState(initial.startDate1 ?? "");
-  const [startDate2, setStartDate2] = useState(initial.startDate2 ?? "");
-  const [coverNote, setCoverNote] = useState(initial.coverNote ?? "");
-  const [submitting, setSubmitting] = useState(false);
-  const total = (parseFloat(labour) || 0) + (parseFloat(materials) || 0);
-
-  const textareaStyle = {
-    width: "100%",
-    minHeight: 70,
-    padding: 10,
-    borderRadius: 8,
-    border: `1px solid ${T.line}`,
-    fontFamily: T.sans,
-    fontSize: 13,
-    color: T.ink,
-    outline: "none",
-    resize: "vertical" as const,
-    boxSizing: "border-box" as const,
-  };
-
-  const send = async () => {
-    const form: BidSubmitFormValues = {
-      labourCost: labour,
-      materialsCost: materials,
-      labourDescription: labourNotes,
-      materialsDescription: materialsNotes,
-      scope,
-      startDate1,
-      startDate2,
-      coverNote,
-    };
-    const err = validateBidSubmitForm(form);
-    if (err) {
-      onError(err);
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const payload = buildBidProposalFromForm(form);
-      await submitBid(createClient(), {
-        quoteId: quote.id,
-        partnerId,
-        partnerName,
-        amount: total,
-        payload,
-      });
-      onSubmitted();
-    } catch (e) {
-      onError(e instanceof Error ? e.message : "Couldn't submit quote");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Modal title={`${isUpdate ? "Update bid" : "Submit quote"} — ${quote.reference ?? quote.id.slice(0, 8)}`} onClose={onClose}>
-      <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ fontSize: 13, color: T.slate, lineHeight: 1.5 }}>
-          <b style={{ color: T.ink, fontWeight: 500 }}>{quote.title}</b>
-          {quote.desc ? (
-            <>
-              <br />
-              {quote.desc}
-            </>
-          ) : null}
-        </div>
-
-        <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.45 }}>
-          Required fields match Fixfy OS — labour and materials notes, scope, and two start dates so the office can send the customer proposal after approval.
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <Field label="Labour (£ inc VAT) *">
-            <Input value={labour} onChange={setLabour} prefix="£" />
-          </Field>
-          <Field label="Materials (£ inc VAT) *">
-            <Input value={materials} onChange={setMaterials} prefix="£" />
-          </Field>
-        </div>
-
-        <Field label="Labour line notes *">
-          <textarea
-            value={labourNotes}
-            onChange={(e) => setLabourNotes(e.target.value)}
-            placeholder="What labour includes — hours, trades on site, prep, clean-down…"
-            style={textareaStyle}
-          />
-        </Field>
-
-        <Field label="Materials line notes *">
-          <textarea
-            value={materialsNotes}
-            onChange={(e) => setMaterialsNotes(e.target.value)}
-            placeholder="Materials included, allowances, or state if customer supplies materials…"
-            style={textareaStyle}
-          />
-        </Field>
-
-        <div
-          style={{
-            padding: 14,
-            background: T.paper,
-            borderRadius: 10,
-            border: `1px solid ${T.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 11, color: T.mute, letterSpacing: 0.4 }}>YOUR TOTAL</div>
-            <div style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 500, color: T.navy }}>{formatGBPdec(total)}</div>
-          </div>
-          <div style={{ fontSize: 12, color: T.mute, textAlign: "right" }}>
-            <div>Net-7 from sign-off</div>
-            <div className="fx-mono">~{formatGBP(total * 0.83)} after VAT</div>
-          </div>
-        </div>
-
-        <Field label="Scope of work (for customer email / PDF) *">
-          <textarea
-            value={scope}
-            onChange={(e) => setScope(e.target.value)}
-            placeholder="Describe the work you will carry out, assumptions, and exclusions…"
-            style={{ ...textareaStyle, minHeight: 90 }}
-          />
-        </Field>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <Field label="Start date option 1 *">
-            <input
-              type="date"
-              value={startDate1}
-              onChange={(e) => setStartDate1(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "9px 10px",
-                borderRadius: 8,
-                border: `1px solid ${T.line}`,
-                fontFamily: T.sans,
-                fontSize: 13,
-                color: T.ink,
-                boxSizing: "border-box",
-              }}
-            />
-          </Field>
-          <Field label="Start date option 2 *">
-            <input
-              type="date"
-              value={startDate2}
-              onChange={(e) => setStartDate2(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "9px 10px",
-                borderRadius: 8,
-                border: `1px solid ${T.line}`,
-                fontFamily: T.sans,
-                fontSize: 13,
-                color: T.ink,
-                boxSizing: "border-box",
-              }}
-            />
-          </Field>
-        </div>
-
-        <Field label="Additional note (optional)">
-          <textarea
-            value={coverNote}
-            onChange={(e) => setCoverNote(e.target.value)}
-            placeholder="Anything else the customer should know — site visit recommended, access notes…"
-            style={textareaStyle}
-          />
-        </Field>
-      </div>
-
-      <div
-        style={{
-          padding: 16,
-          borderTop: `1px solid ${T.line}`,
-          background: T.paper,
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <div style={{ flex: 1, fontSize: 12, color: T.mute }}>
-          {isUpdate ? "Updates your pending bid until the customer decides." : "Editable until the customer decides."}
-        </div>
-        <Button variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <Button variant="primary" icon="send" onClick={send} disabled={submitting || total <= 0}>
-          {submitting ? "Sending…" : isUpdate ? "Update bid" : "Send quote"}
-        </Button>
-      </div>
-    </Modal>
   );
 }

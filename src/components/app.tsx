@@ -6,7 +6,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { T } from "@/lib/tokens";
-import { Button } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { usePartner } from "@/components/partner-context";
 import { createClient } from "@/lib/supabase/client";
@@ -74,17 +73,12 @@ export function TradePortalApp() {
 
   return (
     <div id="app-root" style={{ display: "flex", background: T.paper }}>
-      <Sidebar active={page} onNav={onNav} onOpenOnboarding={() => setShowOnboarding(true)} />
+      <Sidebar active={page} onNav={onNav} />
 
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
         <TopBar
           title={TITLES[page]}
           breadcrumb={page === "settings" && subpage ? ["Settings", settingsPageLabel(subpage)] : []}
-          actions={
-            <Button variant="dark" icon="play-circle" onClick={() => setShowOnboarding(true)}>
-              Onboarding
-            </Button>
-          }
         />
 
         {page === "dashboard" && <Dashboard onOpenJob={handleOpenJob} onNav={onNav} />}

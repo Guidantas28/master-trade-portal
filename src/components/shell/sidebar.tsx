@@ -4,7 +4,9 @@
 import { useState, type CSSProperties } from "react";
 import { AuthWordmark, BrandPanelBackground } from "@/components/brand/auth-wordmark";
 import { T } from "@/lib/tokens";
+import { PartnerRatingInline } from "@/components/ui/partner-rating";
 import { Avatar, Icon } from "@/components/ui/primitives";
+import { usePartnerRating } from "@/hooks/use-partner-rating";
 import { usePartner } from "@/components/partner-context";
 import { useMyJobs } from "@/components/jobs-context";
 import { createClient } from "@/lib/supabase/client";
@@ -24,7 +26,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: "Opportunities",
     items: [
-      { id: "leads", label: "Hot Leads", icon: "sparkles", hot: true },
+      { id: "leads", label: "Hot Leads", icon: "user-plus", hot: true },
       { id: "available", label: "Available Jobs", icon: "wrench" },
       { id: "quotes", label: "Available Quotes", icon: "file-text" },
     ],
@@ -59,12 +61,10 @@ export function Wordmark({ color = T.navy, height = 18 }: { color?: string; heig
 export function Sidebar({
   active,
   onNav,
-  onOpenOnboarding,
   density = "comfortable",
 }: {
   active: string;
   onNav: (id: string) => void;
-  onOpenOnboarding: () => void;
   density?: "comfortable" | "compact";
 }) {
   const isDense = density === "compact";
@@ -178,7 +178,7 @@ export function Sidebar({
       </div>
 
       <TrialCard onUpgrade={() => onNav("settings:billing")} />
-      <UserMiniCard onOpenOnboarding={onOpenOnboarding} onSettings={() => onNav("settings")} />
+      <UserMiniCard onSettings={() => onNav("settings")} />
     </BrandPanelBackground>
   );
 }
@@ -249,15 +249,10 @@ function TrialCard({ onUpgrade }: { onUpgrade: () => void }) {
   );
 }
 
-function UserMiniCard({
-  onSettings,
-  onOpenOnboarding,
-}: {
-  onSettings: () => void;
-  onOpenOnboarding: () => void;
-}) {
+function UserMiniCard({ onSettings }: { onSettings: () => void }) {
   const [open, setOpen] = useState(false);
   const partner = usePartner();
+  const { rating } = usePartnerRating(partner.rating);
   const signOut = async () => {
     await createClient().auth.signOut();
     window.location.href = "/login";
@@ -293,7 +288,10 @@ function UserMiniCard({
           >
             {partner.firstName} {partner.lastName}
           </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{partner.primaryTrade}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{partner.primaryTrade}</span>
+            <PartnerRatingInline rating={rating} size="xs" dark />
+          </div>
         </div>
         <Icon name="chevrons-up-down" size={14} color="rgba(255,255,255,0.5)" />
       </button>
@@ -315,7 +313,6 @@ function UserMiniCard({
           onMouseLeave={() => setOpen(false)}
         >
           <MenuItem icon="user" label="Profile" onClick={() => { onSettings(); setOpen(false); }} />
-          <MenuItem icon="play-circle" label="Re-run onboarding" onClick={() => { onOpenOnboarding(); setOpen(false); }} />
           <MenuItem icon="life-buoy" label="Help & support" />
           <div style={{ height: 1, background: T.line, margin: "6px 4px" }} />
           <MenuItem icon="log-out" label="Sign out" onClick={signOut} />

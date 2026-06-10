@@ -1,0 +1,244 @@
+"use client";
+
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { T } from "@/lib/tokens";
+import { Button, Icon } from "@/components/ui/primitives";
+import type { MyJob } from "@/types";
+import type { ToastInput } from "@/components/ui/toast";
+
+type ShowToast = (t: ToastInput) => void;
+
+const MAX_PHOTOS = 12;
+const textareaStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 80,
+  padding: 10,
+  borderRadius: 8,
+  border: `1px solid ${T.line}`,
+  fontFamily: T.sans,
+  fontSize: 13,
+  color: T.ink,
+  outline: "none",
+  resize: "vertical",
+  boxSizing: "border-box",
+  background: T.white,
+};
+
+function fmtWhen(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+  });
+}
+
+export function OnHoldResponseForm({
+  job,
+  compact = false,
+  onShowToast,
+  onSubmitted,
+}: {
+  job: MyJob;
+  compact?: boolean;
+  onShowToast: ShowToast;
+  onSubmitted: () => void;
+}) {
+  const [notes, setNotes] = useState("");
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [alreadySubmitted, setAlreadySubmitted] = useState(Boolean(job.onHoldSubmissionAt));
+  const [submittedAt, setSubmittedAt] = useState(job.onHoldSubmissionAt);
+  const [onHoldReason, setOnHoldReason] = useState(job.onHoldComplaintDescription ?? job.onHoldReason ?? "");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/jobs/on-hold-response?jobId=${encodeURIComponent(job.uuid)}`);
+        const json = await res.json();
+        if (!cancelled && res.ok) {
+          if (json.onHoldReason) setOnHoldReason(json.onHoldReason);
+          if (json.alreadySubmitted) {
+            setAlreadySubmitted(true);
+            setSubmittedAt(json.submittedAt ?? job.onHoldSubmissionAt);
+          }
+        }
+      } catch {
+        /* use job fields */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [job.uuid, job.onHoldSubmissionAt]);
+
+  const previews = useMemo(() => photos.map((f) => ({ url: URL.createObjectURL(f), name: f.name })), [photos]);
+  useEffect(() => () => previews.forEach((p) => URL.revokeObjectURL(p.url)), [previews]);
+
+  const addPhotos = (files: FileList | null) => {
+    if (!files?.length) return;
+    setPhotos((prev) => [...prev, ...Array.from(files)].slice(0, MAX_PHOTOS));
+  };
+  const removePhoto = (idx: number) => setPhotos((prev) => prev.filter((_, i) => i !== idx));
+
+  const submit = async () => {
+    if (!notes.trim()) {
+      onShowToast({ icon: "alert-triangle", tone: "coral", text: "Please describe how you'll resolve this." });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const form = new FormData();
+      form.append("jobId", job.uuid);
+      form.append("notes", notes.trim());
+      photos.forEach((file, i) => form.append("photos[]", file, file.name || `photo-${i}.jpg`));
+
+      const res = await fetch("/api/jobs/on-hold-response", { method: "POST", body: form });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Couldn't send your response");
+
+      onShowToast({ icon: "send", text: "Response sent — Fixfy will review and get back to you." });
+      setAlreadySubmitted(true);
+      setSubmittedAt(new Date().toISOString());
+      setNotes("");
+      setPhotos([]);
+      onSubmitted();
+    } catch (e) {
+      onShowToast({
+        icon: "alert-triangle",
+        tone: "coral",
+        text: e instanceof Error ? e.message : "Couldn't send your response",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ fontSize: 12, color: T.mute, display: "flex", alignItems: "center", gap: 6 }}>
+        <Icon name="loader" size={13} /> Loading…
+      </div>
+    );
+  }
+
+  if (alreadySubmitted) {
+    return (
+      <div
+        style={{
+          padding: compact ? 10 : 12,
+          borderRadius: 8,
+          background: T.green50,
+          border: `1px solid ${T.green}`,
+          fontSize: 12.5,
+          color: T.ink,
+          lineHeight: 1.45,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, color: T.green, marginBottom: 4 }}>
+          <Icon name="check-circle" size={14} /> Response sent
+        </div>
+        Awaiting Fixfy review{submittedAt ? ` · ${fmtWhen(submittedAt)}` : ""}. The job stays here until the office resumes it.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: compact ? 8 : 10 }} onClick={(e) => e.stopPropagation()}>
+      {onHoldReason ? (
+        <div
+          style={{
+            padding: compact ? 8 : 10,
+            borderRadius: 8,
+            background: T.paper,
+            border: `1px solid ${T.line}`,
+            fontSize: 12,
+            color: T.slate,
+            lineHeight: 1.45,
+          }}
+        >
+          <div style={{ fontSize: 10, fontWeight: 700, color: T.mute, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+            What was reported
+          </div>
+          {onHoldReason}
+        </div>
+      ) : null}
+
+      <div>
+        <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: T.ink, marginBottom: 6 }}>
+          Your response *
+        </label>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="How you'll resolve this, next steps, timeline…"
+          style={{ ...textareaStyle, minHeight: compact ? 70 : 90 }}
+        />
+      </div>
+
+      <div>
+        <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: T.ink, marginBottom: 6 }}>
+          Photos (optional)
+        </label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          {previews.map((p, i) => (
+            <div key={p.url} style={{ position: "relative" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={p.url} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.line}` }} />
+              <button
+                type="button"
+                onClick={() => removePhoto(i)}
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -6,
+                  width: 20,
+                  height: 20,
+                  borderRadius: 9999,
+                  border: "none",
+                  background: T.coral,
+                  color: T.white,
+                  fontSize: 12,
+                  cursor: "pointer",
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {photos.length < MAX_PHOTOS && (
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: `1px dashed ${T.line}`,
+                fontSize: 12,
+                color: T.slate,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name="image-plus" size={14} color={T.coral} />
+              Add photos
+              <input type="file" accept="image/*" multiple hidden onChange={(e) => addPhotos(e.target.files)} />
+            </label>
+          )}
+        </div>
+      </div>
+
+      <Button variant="primary" size={compact ? "sm" : "md"} icon="send" onClick={submit} disabled={submitting} full>
+        {submitting ? "Sending…" : "Submit response"}
+      </Button>
+    </div>
+  );
+}

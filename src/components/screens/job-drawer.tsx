@@ -21,12 +21,12 @@ import {
   Tabs,
   Toggle,
 } from "@/components/ui/primitives";
-import { MapBackground } from "@/components/ui/map-background";
-import { JobsMap } from "@/components/ui/jobs-map";
+import { QuoteAddressMap } from "@/components/ui/quote-address-map";
 import { SourceTag } from "./jobs";
 import { formatGBP, formatGBPdec } from "@/lib/format";
 import { useMyJobs } from "@/components/jobs-context";
 import { JobReportForm } from "./job-report-form";
+import { OnHoldResponseForm } from "./on-hold-response-form";
 import { useToast } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -143,7 +143,7 @@ export function JobDrawer({
                 <span>·</span>
                 <SourceTag source={job.source} />
                 <span>·</span>
-                <span>{job.customer.name}</span>
+                <span>{job.postcode || "—"}</span>
               </div>
               <div
                 style={{
@@ -160,22 +160,58 @@ export function JobDrawer({
               </div>
             </div>
             <Badge
-              tone={statusTone[job.status]}
+              tone={job.needsAttention ? "coral" : statusTone[job.status]}
               icon={
-                job.status === "in_progress"
-                  ? "loader"
-                  : job.status === "final_check"
-                    ? "pen-line"
-                    : job.status === "completed"
-                      ? "check"
-                      : "clock"
+                job.needsAttention
+                  ? "alert-triangle"
+                  : job.status === "in_progress"
+                    ? "loader"
+                    : job.status === "final_check"
+                      ? "pen-line"
+                      : job.status === "completed"
+                        ? "check"
+                        : "clock"
               }
             >
-              {STATUS_LABELS[job.status]}
+              {job.needsAttention ? "Needs attention" : STATUS_LABELS[job.status]}
             </Badge>
             <IconButton icon="more-horizontal" size={32} tone="ghost" />
           </div>
 
+          {job.needsAttention && (
+            <div
+              style={{
+                padding: "10px 20px",
+                background: "#FFF5F2",
+                color: T.coral,
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                fontSize: 12.5,
+                borderBottom: `1px solid rgba(237,75,0,0.15)`,
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 9999,
+                  background: T.coral,
+                  marginTop: 5,
+                  flexShrink: 0,
+                  animation: "fx-pulse 1.6s ease-in-out infinite",
+                }}
+              />
+              <span style={{ flex: 1, lineHeight: 1.45 }}>
+                <b style={{ fontWeight: 600 }}>{job.onHoldLabel || "On hold"}</b>
+                {job.onHoldComplaintDescription || job.onHoldReason ? (
+                  <> — {job.onHoldComplaintDescription || job.onHoldReason}</>
+                ) : (
+                  " — this job needs your response."
+                )}
+              </span>
+            </div>
+          )}
           {job.status === "in_progress" && (
             <div style={{ padding: "10px 20px", background: T.coralTint, color: T.coral, display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
               <span style={{ width: 6, height: 6, borderRadius: 9999, background: T.coral, animation: "fx-pulse 1.6s ease-in-out infinite" }} />
@@ -205,7 +241,7 @@ export function JobDrawer({
             <div style={{ padding: "10px 20px", background: T.amber50, color: T.amber, display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
               <Icon name="hourglass" size={14} />
               <span>
-                <b style={{ fontWeight: 600 }}>Waiting on {job.customer.name.split(" ")[0]} to sign.</b> Link sent 22 May 12:24.
+                <b style={{ fontWeight: 600 }}>Waiting on the customer to sign.</b> Link sent 22 May 12:24.
               </span>
               <span style={{ flex: 1 }} />
               <button
@@ -230,7 +266,9 @@ export function JobDrawer({
         </div>
 
         <div style={{ flex: 1, overflow: "auto", background: T.paper }}>
-          {tab === "overview" && <OverviewTab job={job} />}
+          {tab === "overview" && (
+            <OverviewTab job={job} onShowToast={onShowToast} onSubmitted={refresh} />
+          )}
           {tab === "checklist" && <ChecklistTab job={job} />}
           {tab === "photos" && <PhotosTab job={job} />}
           {tab === "notes" && <NotesTab job={job} />}
@@ -292,46 +330,63 @@ export function JobDrawer({
 // ============================================================
 // OVERVIEW TAB — mirrors Fixfy OS job card (map, client, schedule, scope, pay).
 // ============================================================
-function OverviewTab({ job }: { job: MyJob }) {
+function OverviewTab({
+  job,
+  onShowToast,
+  onSubmitted,
+}: {
+  job: MyJob;
+  onShowToast: ShowToast;
+  onSubmitted: () => void;
+}) {
   const mapsQuery = encodeURIComponent(job.customer.address || job.customer.postcode || job.postcode);
   const googleMapsHref = mapsQuery ? `https://www.google.com/maps/search/?api=1&query=${mapsQuery}` : undefined;
   const wazeHref = mapsQuery ? `https://waze.com/ul?q=${mapsQuery}` : undefined;
 
   return (
     <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+      {job.needsAttention ? (
+        <Card
+          style={{
+            padding: 16,
+            borderColor: T.coral,
+            background: "linear-gradient(135deg, #FFF5F2 0%, #fff 70%)",
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600, color: T.coral, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="alert-triangle" size={16} /> Respond to on-hold job
+          </div>
+          <OnHoldResponseForm job={job} onShowToast={onShowToast} onSubmitted={onSubmitted} />
+        </Card>
+      ) : null}
       <Card style={{ padding: 0, overflow: "hidden" }}>
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-            minHeight: 220,
+            alignItems: "stretch",
+            minHeight: 200,
             borderBottom: `1px solid ${T.line}`,
           }}
         >
-          <div style={{ position: "relative", minHeight: 220, borderRight: `1px solid ${T.line}` }}>
-            {typeof job.lat === "number" && typeof job.lng === "number" ? (
-              <JobsMap jobs={[job]} onOpenJob={() => {}} minHeight={220} />
-            ) : (
-              <div style={{ position: "relative", height: "100%", minHeight: 220 }}>
-                <MapBackground />
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: 16,
-                    textAlign: "center",
-                    fontSize: 12,
-                    color: T.mute,
-                    background: "rgba(255,255,255,0.72)",
-                  }}
-                >
-                  Location not mapped yet — use the address below for directions.
-                </div>
-              </div>
-            )}
+          <div
+            style={{
+              position: "relative",
+              minHeight: 200,
+              borderRight: `1px solid ${T.line}`,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <QuoteAddressMap
+              address={job.customer.address}
+              postcode={job.postcode}
+              lat={job.lat}
+              lng={job.lng}
+              minHeight={200}
+              fill
+              interactive
+            />
           </div>
 
           <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
@@ -365,7 +420,7 @@ function OverviewTab({ job }: { job: MyJob }) {
             ) : null}
 
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: T.ink }}>{job.customer.name}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.mute, textTransform: "uppercase", letterSpacing: 0.4 }}>Site</div>
               <div style={{ fontSize: 12.5, color: T.slate, marginTop: 4, lineHeight: 1.45 }}>{job.customer.address || "—"}</div>
               {job.customer.postcode ? (
                 <div className="fx-mono" style={{ fontSize: 11.5, color: T.mute, marginTop: 2 }}>
@@ -413,9 +468,7 @@ function OverviewTab({ job }: { job: MyJob }) {
           <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.6, color: T.navy, textTransform: "uppercase" }}>Schedule</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             <OsMiniTile label="Start date" value={job.scheduleStartLabel || "—"} />
-            <OsMiniTile label="Expected finish" value={job.scheduleFinishLabel || "—"} />
             <OsMiniTile label="Arrival window" value={job.scheduleArrivalLabel || "—"} />
-            <OsMiniTile label="Estimated duration" value={job.durationEst || "—"} />
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -477,30 +530,37 @@ function OverviewTab({ job }: { job: MyJob }) {
       ) : null}
 
       <DrawerSection title="Your pay" icon="banknote">
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: 6 }}>
-            <PaymentLine label="Labour" value={formatGBPdec(job.labour)} />
-            {job.materials > 0 ? <PaymentLine label="Materials" value={formatGBPdec(job.materials)} /> : null}
-            {job.vat ? <PaymentLine label="VAT (included)" value="" sub /> : null}
-            <div style={{ height: 1, background: T.line, marginTop: 4 }} />
-            <div style={{ display: "flex", alignItems: "baseline", marginTop: 4 }}>
-              <span style={{ flex: 1, fontSize: 13, color: T.ink, fontWeight: 500 }}>Total payout</span>
-              <span style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 500, color: T.navy }}>{formatGBPdec(job.total)}</span>
-            </div>
-          </div>
-          <div
-            style={{
-              padding: "10px 14px",
-              background: T.paper2,
-              borderRadius: 10,
-              fontSize: 11.5,
-              color: T.slate,
-              lineHeight: 1.5,
-              maxWidth: 220,
-            }}
-          >
-            Partner payout via self-bill <b style={{ color: T.ink }}>Net-7</b> after job sign-off.
-          </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))",
+            gap: 10,
+          }}
+        >
+          <PayTile label="Labour" value={formatGBPdec(job.labour)} />
+          {job.materials > 0 ? <PayTile label="Materials" value={formatGBPdec(job.materials)} /> : null}
+          {job.vat ? (
+            <PayTile label="VAT" value="Included" muted />
+          ) : null}
+        </div>
+        <div
+          style={{
+            marginTop: 12,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: T.paper2,
+            border: `1px solid ${T.line}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Total payout</span>
+          <span style={{ fontFamily: T.mono, fontSize: "clamp(20px, 5vw, 26px)", fontWeight: 600, color: T.navy }}>
+            {formatGBPdec(job.total)}
+          </span>
         </div>
       </DrawerSection>
     </div>
@@ -549,11 +609,30 @@ function AccessFlag({
   );
 }
 
-function PaymentLine({ label, value, sub }: { label: string; value: string; sub?: boolean }) {
+function PayTile({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
-    <div style={{ display: "flex", alignItems: "center" }}>
-      <span style={{ flex: 1, fontSize: 13, color: sub ? T.mute : T.slate }}>{label}</span>
-      {value && <span style={{ fontFamily: T.mono, fontSize: 13, color: T.ink }}>{value}</span>}
+    <div
+      style={{
+        padding: "10px 12px",
+        borderRadius: 10,
+        background: T.white,
+        border: `1px solid ${T.line}`,
+        minWidth: 0,
+      }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.5, color: T.mute, textTransform: "uppercase", marginBottom: 4 }}>
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: muted ? T.sans : T.mono,
+          fontSize: muted ? 12 : 15,
+          fontWeight: 500,
+          color: muted ? T.slate : T.ink,
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fixfy — Contractor Service Agreement</title>
+<style>
+  :root{--navy:#020040;--coral:#ED4B00;--ink:#1a1a1a;--grey:#555;--light:#f2f2f5;--line:#ccc;}
+  *{box-sizing:border-box;}
+  html{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  body{font-family:Arial,Helvetica,sans-serif;color:var(--ink);background:#e9e9ee;margin:0;line-height:1.5;font-size:11pt;}
+  .page{background:#fff;max-width:820px;margin:24px auto;padding:48px 56px 64px;box-shadow:0 2px 16px rgba(0,0,0,.12);}
+  header.brand{display:flex;justify-content:space-between;align-items:baseline;border-bottom:3px solid var(--coral);padding-bottom:10px;margin-bottom:6px;}
+  header.brand{align-items:center;}
+  header.brand .logo{display:flex;align-items:center;}
+  .fixfy-logo-wrap{display:inline-flex;align-items:center;gap:8px;}
+  .fixfy-logo-img{height:32px;width:auto;display:block;}
+  header.brand .meta{font-size:8.5pt;color:var(--grey);}
+  h1.title{font-size:24pt;color:var(--navy);font-weight:800;margin:24px 0 0;line-height:1.05;}
+  h1.title .accent{color:var(--coral);display:block;}
+  .lead{text-align:justify;margin:14px 0;}
+  .party{font-weight:700;color:var(--navy);}
+  .andword{font-style:italic;}
+  h2.section{font-size:13pt;color:var(--navy);font-weight:700;margin:24px 0 8px;}
+  p{text-align:justify;margin:8px 0;}
+  .sub{font-weight:700;color:var(--navy);}
+  ul.dash{list-style:none;margin:6px 0 10px;padding-left:24px;}
+  ul.dash li{position:relative;padding-left:18px;margin:3px 0;text-align:justify;}
+  ul.dash li::before{content:"\2013";color:var(--coral);position:absolute;left:0;font-weight:700;}
+  .label{font-size:9pt;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px;}
+  table.details{width:100%;border-collapse:collapse;margin:8px 0 4px;}
+  table.details td{border:1px solid var(--line);padding:8px 12px;font-size:10pt;vertical-align:top;}
+  table.details td.k{background:var(--light);font-weight:700;color:var(--navy);width:32%;}
+  table.details td.v{height:14px;}
+  .callout{background:var(--light);border-left:4px solid var(--coral);padding:12px 16px;margin:14px 0;font-size:10pt;}
+  .execution{page-break-before:always;}
+  h2.exec{font-size:18pt;color:var(--navy);font-weight:800;margin:8px 0 14px;}
+  .sigwrap{display:flex;gap:0;border:1px solid var(--line);}
+  .sigcell{flex:1;padding:16px;}
+  .sigcell + .sigcell{border-left:1px solid var(--line);}
+  .sigcell .h{font-weight:700;color:var(--navy);font-size:10.5pt;margin-bottom:4px;}
+  .sigcell .org{font-size:10pt;margin:2px 0;}
+  .sigline{border-bottom:1.5px solid var(--navy);height:34px;margin-top:14px;}
+  .sigcap{font-size:8.5pt;color:var(--grey);margin-top:2px;}
+  footer.foot{border-top:1px solid var(--line);margin-top:40px;padding-top:8px;display:flex;justify-content:space-between;font-size:8.5pt;color:var(--grey);}
+  @media print{body{background:#fff;}.page{box-shadow:none;margin:0;max-width:100%;padding:0 12mm;}@page{size:A4;margin:14mm 0;}}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="brand"><div class="logo">{{FIXFY_LOGO}}</div><div class="meta">Getfixfy Ltd &middot; Co. No. 15406523</div></header>
+  <h1 class="title">CONTRACTOR<span class="accent">SERVICE AGREEMENT</span></h1>
+  <p class="lead">This Contractor Service Agreement (the &ldquo;Agreement&rdquo;) is made between <span class="party">GETFIXFY LTD</span>, a company incorporated in England and Wales under company number 15406523, registered office 124 City Road, London EC1V 2NX (&ldquo;Fixfy&rdquo; or the &ldquo;Company&rdquo;), and the undersigned independent contractor (the &ldquo;Contractor&rdquo;).</p>
+  <p class="lead">It governs the terms on which the Contractor performs maintenance, repair and facilities Services for Clients introduced through the Fixfy platform.</p>
+
+  <div class="callout"><strong>Relationship.</strong> The Contractor is an independent business engaged on a non-exclusive, job-by-job basis. Fixfy acts as a disclosed agent introducing Jobs; it is not the Contractor&rsquo;s employer and is not the end client of the works.</div>
+
+  <div class="label">Contractor Details</div>
+  <table class="details">
+    <tr><td class="k">Full legal / Trading name</td><td class="v"></td></tr>
+    <tr><td class="k">Registration / UTR / Company no.</td><td class="v"></td></tr>
+    <tr><td class="k">Trade(s) and certifications held</td><td class="v"></td></tr>
+    <tr><td class="k">Business address</td><td class="v"></td></tr>
+    <tr><td class="k">Public liability insurance (insurer / cover)</td><td class="v"></td></tr>
+    <tr><td class="k">Email</td><td class="v"></td></tr>
+  </table>
+
+  <h2 class="section">1.&nbsp;&nbsp;Services</h2>
+  <p><span class="sub">1.1</span>&nbsp;&nbsp;The Contractor shall perform maintenance, repair, installation and related facilities Services for Jobs it accepts through the platform (the &ldquo;Services&rdquo;).</p>
+  <p><span class="sub">1.2</span>&nbsp;&nbsp;Each accepted Job, together with its scope, location, pricing and timing, forms a specific engagement under this Agreement.</p>
+  <p><span class="sub">1.3</span>&nbsp;&nbsp;The Contractor is free to accept or decline any Job and is under no obligation to accept a minimum volume of work.</p>
+
+  <h2 class="section">2.&nbsp;&nbsp;Independent Business Status</h2>
+  <p><span class="sub">2.1</span>&nbsp;&nbsp;The Contractor performs the Services as an independent business and not as an employee or worker of Fixfy. Nothing in this Agreement creates any employment, partnership, joint venture, or exclusivity.</p>
+  <p><span class="sub">2.2</span>&nbsp;&nbsp;The Contractor controls how, when and by whom the Services are performed, subject to the Job requirements, agreed attendance windows and quality standards.</p>
+  <p><span class="sub">2.3</span>&nbsp;&nbsp;The Contractor may send a suitably qualified and insured substitute to perform a Job, provided the substitute meets the same vetting, certification and standards requirements.</p>
+  <p><span class="sub">2.4</span>&nbsp;&nbsp;The Contractor is responsible for its own taxes, National Insurance, VAT (where applicable), and obligations to its own personnel, and indemnifies Fixfy against any related claim.</p>
+
+  <h2 class="section">3.&nbsp;&nbsp;Qualifications, Insurance and Compliance</h2>
+  <p><span class="sub">3.1</span>&nbsp;&nbsp;The Contractor warrants that it holds and maintains all licences, qualifications, certifications and insurance required to perform the Services lawfully, including, where relevant, Gas Safe, NICEIC, NAPIT, EICR and Fire Safety certifications, and valid public liability insurance.</p>
+  <p><span class="sub">3.2</span>&nbsp;&nbsp;The Contractor shall upload valid evidence to the platform and keep it current. Fixfy may suspend allocation of Jobs where evidence is expired, missing or unverifiable.</p>
+  <p><span class="sub">3.3</span>&nbsp;&nbsp;The Contractor shall comply with all applicable law, health and safety requirements, and site rules when performing the Services.</p>
+
+  <h2 class="section">4.&nbsp;&nbsp;Standards and Service Levels</h2>
+  <p><span class="sub">4.1</span>&nbsp;&nbsp;The Contractor shall perform the Services with reasonable skill and care, to industry standard, and complete each Job to the scope agreed.</p>
+  <p><span class="sub">4.2</span>&nbsp;&nbsp;The Contractor shall meet agreed response and attendance windows, communicate progress through the platform, and record completion as required.</p>
+  <p><span class="sub">4.3</span>&nbsp;&nbsp;Defective or incomplete work shall be remedied by the Contractor at its own cost. Repeated failure to meet standards may result in reduced Job allocation, suspension or termination.</p>
+
+  <h2 class="section">5.&nbsp;&nbsp;Fees, Commission and Payment</h2>
+  <p><span class="sub">5.1</span>&nbsp;&nbsp;The fee for each Job is the amount shown or agreed on the platform for that Job. Fixfy applies its commission to each Job at the rate notified to the Contractor.</p>
+  <p><span class="sub">5.2</span>&nbsp;&nbsp;All payments are processed through the platform&rsquo;s integrated payment system. The Contractor shall not take payment directly from the Client for platform Jobs.</p>
+  <p><span class="sub">5.3</span>&nbsp;&nbsp;Invoicing is handled by self-billing under the separate Self-Billing Agreement. Fixfy issues a self-billed invoice and remits the Contractor&rsquo;s fee, net of commission, in accordance with the agreed payment cycle.</p>
+  <p><span class="sub">5.4</span>&nbsp;&nbsp;Fixfy is responsible only for fees relating to Jobs effectively completed and recorded on the platform.</p>
+
+  <h2 class="section">6.&nbsp;&nbsp;Anti-Circumvention</h2>
+  <p><span class="sub">6.1</span>&nbsp;&nbsp;For any Client introduced through the platform, the Contractor shall not solicit, divert, accept or perform work for that Client outside the platform where the work originated through Fixfy, whether directly or indirectly.</p>
+  <p><span class="sub">6.2</span>&nbsp;&nbsp;The Contractor shall not retain, share or use Client contact details to bypass the platform. Breach may result in immediate termination and recovery of lost commission.</p>
+
+  <h2 class="section">7.&nbsp;&nbsp;Confidentiality and Data</h2>
+  <p><span class="sub">7.1</span>&nbsp;&nbsp;The Contractor shall keep confidential all Client data, pricing, systems, workflows and commercial information of Fixfy, during and after this Agreement.</p>
+  <p><span class="sub">7.2</span>&nbsp;&nbsp;Job history, documentation and records generated on the platform remain the property of Fixfy and the relevant Client. Both parties shall comply with the UK GDPR and the Data Protection Act 2018.</p>
+
+  <h2 class="section">8.&nbsp;&nbsp;Liability and Indemnity</h2>
+  <p><span class="sub">8.1</span>&nbsp;&nbsp;The Contractor is solely responsible for the Services it performs and indemnifies Fixfy and the Client against loss, damage or claims arising from the Contractor&rsquo;s acts, omissions, defective work or breach of this Agreement.</p>
+  <p><span class="sub">8.2</span>&nbsp;&nbsp;Nothing in this Agreement excludes liability for death or personal injury caused by negligence, fraud, or any liability that cannot be excluded by law.</p>
+
+  <h2 class="section">9.&nbsp;&nbsp;Term and Termination</h2>
+  <p><span class="sub">9.1</span>&nbsp;&nbsp;This Agreement remains in force until terminated by either party on written notice (including through the platform).</p>
+  <p><span class="sub">9.2</span>&nbsp;&nbsp;Fixfy may suspend or terminate immediately for breach, expired certifications, safety risk or conduct harmful to Clients or the platform.</p>
+  <p><span class="sub">9.3</span>&nbsp;&nbsp;On termination the Contractor shall complete any Job already in progress (unless instructed otherwise), cease representing Fixfy, and return or delete Company and Client data. Clauses on confidentiality, anti-circumvention, data, liability and accrued payment survive termination.</p>
+
+  <h2 class="section">10.&nbsp;&nbsp;Nature of the Relationship &mdash; Acknowledgements</h2>
+  <p>The Contractor acknowledges that Job coordination, response windows, quality standards and platform communication requirements are commercial service requirements and shall not be interpreted as employment supervision, working-hour control or labour subordination.</p>
+
+  <h2 class="section">11.&nbsp;&nbsp;Governing Law</h2>
+  <p><span class="sub">11.1</span>&nbsp;&nbsp;This Agreement is governed by the laws of England and Wales. Disputes shall be subject to confidential arbitration in London under the LCIA Rules, with London as the seat and English as the language.</p>
+
+  <div class="execution">
+    <h2 class="exec">EXECUTION</h2>
+    <p>By clicking &ldquo;Sign&rdquo; / &ldquo;Accept&rdquo; in the Fixfy onboarding portal, or by signing below, the parties agree to this Contractor Service Agreement.</p>
+    <div class="sigwrap">
+      <div class="sigcell">
+        <div class="h">For and on behalf of GETFIXFY LTD</div>
+        <div class="org">Getfixfy Ltd</div>
+        <div class="org">124 City Road, London EC1V 2NX</div>
+        <div class="org">Co. No. 15406523</div>
+        <div class="sigline"></div><div class="sigcap">Authorised signatory</div>
+        <div class="sigline"></div><div class="sigcap">Date</div>
+      </div>
+      <div class="sigcell">
+        <div class="h">THE CONTRACTOR</div>
+        <div class="org">(as identified in Contractor Details above)</div>
+        <div class="sigline"></div><div class="sigcap">Name / Business name</div>
+        <div class="sigline"></div><div class="sigcap">Signature</div>
+        <div class="sigline"></div><div class="sigcap">Date</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot"><span>Contractor Service Agreement &middot; v2026 &mdash; Confidential</span><span>Getfixfy Ltd</span></footer>
+</div>
+</body>
+</html>

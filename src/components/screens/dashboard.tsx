@@ -9,12 +9,15 @@ import { formatGBP } from "@/lib/format";
 import { jobMatchesDateFilter, londonYmd } from "@/lib/date-range-filter";
 import { useDateRangeFilter } from "@/hooks/use-date-range-filter";
 import { DateRangeFilter } from "@/components/ui/date-range-filter";
+import { PartnerRatingCard } from "@/components/ui/partner-rating";
 import { usePartner } from "@/components/partner-context";
+import { usePartnerRating } from "@/hooks/use-partner-rating";
 import { useMyJobs } from "@/components/jobs-context";
 import { createClient } from "@/lib/supabase/client";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
 import { fetchAvailableJobs } from "@/lib/queries/available-jobs";
 import { fetchAvailableQuotes } from "@/lib/queries/quotes";
+import { PartnerLevelGoal } from "@/components/ui/partner-level-goal";
 import { resolvePartnerMonthlyGoal, revenueGoalProgress } from "@/lib/partner-revenue-goal";
 import type { ActivityTone, AvailableJob, MyJob, QuoteRequest } from "@/types";
 
@@ -89,6 +92,7 @@ export function Dashboard({
   onNav: (route: string) => void;
 }) {
   const partner = usePartner();
+  const { rating, complaintCount, pointsLost, topComplaints, loaded: ratingLoaded } = usePartnerRating(partner.rating);
   const { jobs, loading, error, refresh } = useMyJobs();
   const { value: dateFilter, setValue: setDateFilter, label: dateFilterLabel } = useDateRangeFilter();
 
@@ -230,7 +234,7 @@ export function Dashboard({
     for (const l of opps.leads.slice(0, 4)) {
       items.push({
         id: `lead-${l.offerId}`,
-        icon: "sparkles",
+        icon: "user-plus",
         tone: l.status === "contacted" ? "green" : "coral",
         text: l.status === "contacted" ? `Lead contacted — ${l.title}` : `New lead — ${l.title}`,
         meta: l.budget != null ? `${formatGBP(l.budget)} · ${l.status === "contacted" ? "done" : "act now"}` : "Hot enquiry",
@@ -419,30 +423,10 @@ export function Dashboard({
 
         {/* Gamified strip: month goal + live opportunities */}
         <Card style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 500, color: T.slate, textTransform: "uppercase", letterSpacing: 0.35 }}>
-                Month goal
-              </span>
-              <span style={{ fontSize: 12, color: T.mute, fontFamily: T.mono }}>
-                {formatGBP(d.monthEarnings)} / {formatGBP(d.goal.goal)} · {d.goal.pct}%
-              </span>
-            </div>
-            <div style={{ height: 6, borderRadius: 9999, background: T.paper2, overflow: "hidden" }}>
-              <div
-                style={{
-                  width: `${d.goal.pct}%`,
-                  height: "100%",
-                  borderRadius: 9999,
-                  background: d.goal.hit ? T.green : `linear-gradient(90deg, ${T.coral}, #ff8a4c)`,
-                  transition: "width 400ms ease",
-                }}
-              />
-            </div>
-          </div>
+          <PartnerLevelGoal earned={d.monthEarnings} goal={d.goal.goal} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <LiveIndicator label="Live" />
-            <OppPill icon="sparkles" label="Leads" count={opps.leads.length} hot={oppStats.newLeads > 0} tone="coral" onClick={() => onNav("leads")} />
+            <OppPill icon="user-plus" label="Leads" count={opps.leads.length} hot={oppStats.newLeads > 0} tone="coral" onClick={() => onNav("leads")} />
             <OppPill icon="zap" label="Jobs" count={opps.jobs.length} hot={opps.jobs.length > 0} tone="navy" onClick={() => onNav("available")} />
             <OppPill icon="file-text" label="Quotes" count={opps.quotes.length} hot={opps.quotes.length > 0} tone="amber" onClick={() => onNav("quotes")} />
             <IconButton icon="refresh-cw" size={28} tone="ghost" onClick={() => void loadOpportunities()} />
@@ -530,6 +514,16 @@ export function Dashboard({
           </div>
         </Card>
 
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {ratingLoaded && (
+            <PartnerRatingCard
+              rating={rating}
+              complaintCount={complaintCount}
+              pointsLost={pointsLost}
+              topComplaints={topComplaints}
+              compact
+            />
+          )}
         <Card>
           <div style={{ padding: "14px 16px", display: "flex", alignItems: "center", borderBottom: `1px solid ${T.line}` }}>
             <div style={{ flex: 1, fontSize: 15, fontWeight: 500, color: T.navy }}>Activity</div>
@@ -551,6 +545,7 @@ export function Dashboard({
             )}
           </div>
         </Card>
+        </div>
       </div>
 
       {/* Footer mini cards */}
@@ -685,7 +680,6 @@ function ScheduleRow({ job, onClick, divider }: { job: MyJob; onClick: () => voi
     >
       <div className="fx-mono" style={{ fontSize: 12, color: T.slate, lineHeight: 1.3 }}>
         <div style={{ color: T.ink, fontWeight: 500 }}>{time || "—"}</div>
-        <div style={{ color: T.mute, fontSize: 11 }}>{job.durationEst}</div>
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

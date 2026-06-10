@@ -1,10 +1,9 @@
-// Field metadata for the partner work-report form — a faithful port of master-os
-// `src/lib/public-report-templates.ts` so a report submitted from the trade portal lands in the
-// SAME jobs.start_report / jobs.final_report JSONB shape the OS dashboard V2 cards already render.
-//
-// No timer here — the partner types hours/minutes by hand and we serialise to duration_ms on submit.
+// Field metadata for the partner work-report form — mirrors master-os
+// `src/lib/public-report-templates.ts` so reports land in the same JSONB shape.
 
-export type ReportTemplate = "general" | "gardener" | "cleaner";
+import { isCertificateTypeOfWork } from "@/lib/type-of-work";
+
+export type ReportTemplate = "general" | "gardener" | "cleaner" | "certificate";
 
 const GARDENER_KEYWORDS = ["garden", "lawn", "hedge", "landscap"];
 const CLEANER_KEYWORDS = ["clean", "housekeep", "sanitiz", "sanitis"];
@@ -13,6 +12,9 @@ export function pickReportTemplate(input: { serviceType?: string | null; title?:
   const haystack = `${input.serviceType ?? ""} ${input.title ?? ""}`.toLowerCase();
   if (GARDENER_KEYWORDS.some((k) => haystack.includes(k))) return "gardener";
   if (CLEANER_KEYWORDS.some((k) => haystack.includes(k))) return "cleaner";
+  if (isCertificateTypeOfWork(input.serviceType) || isCertificateTypeOfWork(input.title)) {
+    return "certificate";
+  }
   return "general";
 }
 
@@ -24,9 +26,7 @@ export interface ReportField {
   hint?: string;
   type: ReportFieldType;
   options?: Array<{ value: string; label: string }>;
-  /** When true, treat blank as "skip" (don't send the key at all). */
   optional?: boolean;
-  /** When set: a key whose true/false value gates whether this field is shown. */
   showIf?: { key: string; equals: unknown };
 }
 
@@ -135,16 +135,124 @@ const SPECS: Record<ReportTemplate, TemplateSpec> = {
       { key: "customer_inspected", label: "Customer inspected the work?", type: "boolean" },
     ],
   },
+  certificate: {
+    start: [
+      {
+        key: "site_access_obtained",
+        label: "Were you able to access the property?",
+        type: "boolean",
+      },
+      {
+        key: "access_issues_note",
+        label: "Access issues",
+        hint: "Explain what blocked access, if applicable.",
+        type: "longtext",
+        optional: true,
+        showIf: { key: "site_access_obtained", equals: false },
+      },
+    ],
+    final: [
+      {
+        key: "inspection_summary",
+        label: "Inspection / testing summary",
+        hint: "What was inspected or tested on site.",
+        type: "longtext",
+      },
+      {
+        key: "certificate_issued",
+        label: "Certificate or report issued?",
+        type: "boolean",
+      },
+      {
+        key: "certificate_number",
+        label: "Certificate / report reference",
+        type: "text",
+        optional: true,
+        showIf: { key: "certificate_issued", equals: true },
+      },
+      {
+        key: "certificate_outcome",
+        label: "Outcome",
+        type: "select",
+        showIf: { key: "certificate_issued", equals: true },
+        options: [
+          { value: "satisfactory", label: "Satisfactory" },
+          { value: "satisfactory_with_recommendations", label: "Satisfactory with recommendations" },
+          { value: "unsatisfactory", label: "Unsatisfactory" },
+        ],
+      },
+      {
+        key: "expiry_date",
+        label: "Expiry date",
+        hint: "DD/MM/YYYY — if applicable.",
+        type: "text",
+        optional: true,
+        showIf: { key: "certificate_issued", equals: true },
+      },
+      {
+        key: "remedial_work_required",
+        label: "Remedial work required?",
+        type: "boolean",
+      },
+      {
+        key: "remedial_work_details",
+        label: "Remedial work details",
+        type: "longtext",
+        optional: true,
+        showIf: { key: "remedial_work_required", equals: true },
+      },
+      {
+        key: "additional_charges",
+        label: "Any additional charges agreed on site?",
+        type: "boolean",
+      },
+      {
+        key: "additional_charges_note",
+        label: "Charges note",
+        type: "text",
+        optional: true,
+        showIf: { key: "additional_charges", equals: true },
+      },
+      {
+        key: "follow_up_required",
+        label: "Follow-up visit required?",
+        type: "boolean",
+      },
+    ],
+  },
 };
 
 export function fieldsForTemplate(template: ReportTemplate): TemplateSpec {
   return SPECS[template];
 }
 
-/** Mirrors the per-template photo bucket layout from the mobile app. */
+export function reportTemplateDisplayLabel(template: ReportTemplate): string {
+  const labels: Record<ReportTemplate, string> = {
+    general: "General maintenance",
+    gardener: "Gardening",
+    cleaner: "Cleaning",
+    certificate: "Certificate",
+  };
+  return labels[template];
+}
+
+export function reportSectionTitles(template: ReportTemplate): { start: string; final: string } {
+  if (template === "certificate") return { start: "Site access", final: "Certificate details" };
+  return { start: "On arrival", final: "On completion" };
+}
+
+export interface ReportPhotoSlot {
+  key: string;
+  label: string;
+  hint?: string;
+  optional?: boolean;
+  accept?: string;
+  prominent?: boolean;
+}
+
 export function photoSlotsForTemplate(template: ReportTemplate): {
-  start: Array<{ key: string; label: string }>;
-  final: Array<{ key: string; label: string }>;
+  start: ReportPhotoSlot[];
+  final: ReportPhotoSlot[];
 } {
   if (template === "cleaner") {
     const rooms = [
@@ -157,5 +265,23 @@ export function photoSlotsForTemplate(template: ReportTemplate): {
     ];
     return { start: [{ key: "equipment", label: "Equipment" }, ...rooms], final: rooms };
   }
-  return { start: [{ key: "before", label: "Before photos" }], final: [{ key: "after", label: "After photos" }] };
+  if (template === "certificate") {
+    return {
+      start: [],
+      final: [
+        {
+          key: "certificate",
+          label: "Attach certificate or report",
+          hint: "Upload the issued certificate or report — PDF or photo.",
+          accept: "image/*,application/pdf,.pdf",
+          prominent: true,
+          optional: true,
+        },
+      ],
+    };
+  }
+  return {
+    start: [{ key: "before", label: "Before photos" }],
+    final: [{ key: "after", label: "After photos" }],
+  };
 }

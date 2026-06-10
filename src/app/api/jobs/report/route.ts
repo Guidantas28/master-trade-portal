@@ -19,8 +19,10 @@ const misconfig = () =>
   );
 
 /** Map a File's mime type to a storage extension. Defaults to jpg. */
-function extForType(type: string | undefined): string {
-  const t = (type ?? "").toLowerCase();
+function extForFile(file: File): string {
+  const t = (file.type ?? "").toLowerCase();
+  const name = file.name.toLowerCase();
+  if (t.includes("pdf") || name.endsWith(".pdf")) return "pdf";
   if (t.includes("png")) return "png";
   if (t.includes("webp")) return "webp";
   if (t.includes("gif")) return "gif";
@@ -32,7 +34,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const BUCKET = "job-reports";
-const VALID_TEMPLATES = new Set(["general", "gardener", "cleaner"]);
+const VALID_TEMPLATES = new Set(["general", "gardener", "cleaner", "certificate"]);
 
 type Svc = ReturnType<typeof createServiceClient>;
 
@@ -198,14 +200,25 @@ async function uploadSlotPhotos(
   template: string,
   failures: string[],
 ): Promise<string[] | Record<string, string[]>> {
-  if (template !== "cleaner") {
+  const startSlots =
+    template === "cleaner"
+      ? new Set(["equipment", "living_room", "hallways", "kitchen", "bathrooms", "bedrooms", "steam_cleaning"])
+      : new Set(["before"]);
+  const finalSlots =
+    template === "cleaner"
+      ? new Set(["living_room", "hallways", "kitchen", "bathrooms", "bedrooms", "steam_cleaning"])
+      : template === "certificate"
+        ? new Set(["certificate"])
+        : new Set(["after"]);
+
+  const usesSlotMap = template === "cleaner" || template === "certificate";
+  const allowed = kind === "start" ? startSlots : finalSlots;
+
+  if (!usesSlotMap) {
     const flatSlot = kind === "start" ? "before" : "after";
     return uploadFlat(svc, jobId, kind, photoEntries[flatSlot] ?? [], failures);
   }
-  const allowed =
-    kind === "start"
-      ? new Set(["equipment", "living_room", "hallways", "kitchen", "bathrooms", "bedrooms", "steam_cleaning"])
-      : new Set(["living_room", "hallways", "kitchen", "bathrooms", "bedrooms", "steam_cleaning"]);
+
   const result: Record<string, string[]> = {};
   for (const [slot, files] of Object.entries(photoEntries)) {
     if (!allowed.has(slot)) continue;
@@ -219,9 +232,10 @@ async function uploadFlat(svc: Svc, jobId: string, prefix: string, files: File[]
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     const bytes = new Uint8Array(await f.arrayBuffer());
-    // UUID path (collision-proof) + real extension from the file's mime type.
-    const path = `${jobId}/${prefix}-${randomUUID()}.${extForType(f.type)}`;
-    const { error } = await svc.storage.from(BUCKET).upload(path, bytes, { contentType: f.type || "image/jpeg", upsert: false });
+    const ext = extForFile(f);
+    const path = `${jobId}/${prefix}-${randomUUID()}.${ext}`;
+    const contentType = ext === "pdf" ? "application/pdf" : f.type || "image/jpeg";
+    const { error } = await svc.storage.from(BUCKET).upload(path, bytes, { contentType, upsert: false });
     if (error) {
       console.error("[jobs/report] photo upload failed:", error);
       failures.push(`${prefix}-${i}`);

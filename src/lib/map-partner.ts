@@ -5,6 +5,7 @@
 // until the schema gains them (trial/subscription land with the Stripe phase; bio,
 // postcode, radius, years-experience aren't columns yet).
 
+import { displayPartnerRating } from "@/lib/partner-rating";
 import type { Partner, Trade } from "@/types";
 
 export interface PartnerRow {
@@ -67,7 +68,7 @@ export function mapPartner(row: PartnerRow): Partner {
     yearsExperience: row.years_experience ?? 0,
     bio: row.bio ?? "",
     excludedPostcodes: row.excluded_postcodes ?? [],
-    rating: row.rating ?? 0,
+    rating: displayPartnerRating(row.rating),
     ratingsCount: row.jobs_completed ?? 0,
   };
 }

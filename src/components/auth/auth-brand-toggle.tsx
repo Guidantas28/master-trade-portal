@@ -255,6 +255,7 @@ function Alert({ tone, children }: { tone: "error" | "dev"; children: ReactNode 
 }
 
 function SignInFlow({
+  initialEmail = "",
   onRegister,
   onSendCode,
   onVerify,
@@ -262,6 +263,7 @@ function SignInFlow({
   error,
   devNote,
 }: {
+  initialEmail?: string;
   onRegister: () => void;
   onSendCode: (email: string) => Promise<string | null>;
   onVerify: (email: string, code: string) => Promise<void>;
@@ -270,9 +272,13 @@ function SignInFlow({
   devNote: string | null;
 }) {
   const [step, setStep] = useState<"email" | "code">("email");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState("");
   const valid = isEmail(email);
+
+  useEffect(() => {
+    if (initialEmail && isEmail(initialEmail)) setEmail(initialEmail);
+  }, [initialEmail]);
 
   const send = async () => {
     if (!valid || busy) return;
@@ -553,7 +559,13 @@ function RegisterFlow({
   );
 }
 
-export function AuthBrandToggle({ initialMode = "signin" }: { initialMode?: "signin" | "register" }) {
+export function AuthBrandToggle({
+  initialMode = "signin",
+  initialEmail = "",
+}: {
+  initialMode?: "signin" | "register";
+  initialEmail?: string;
+}) {
   const router = useRouter();
   const [mode, setMode] = useState<"signin" | "register">(initialMode);
   const [busy, setBusy] = useState(false);
@@ -820,6 +832,7 @@ export function AuthBrandToggle({ initialMode = "signin" }: { initialMode?: "sig
           </div>
           {mode === "signin" ? (
             <SignInFlow
+              initialEmail={initialEmail}
               onRegister={() => switchMode("register")}
               onSendCode={sendCode}
               onVerify={verifySignIn}

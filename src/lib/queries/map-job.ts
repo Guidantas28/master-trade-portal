@@ -4,6 +4,7 @@
 // Checklist/photo tables don't exist yet, so those counts are placeholders (0) — the
 // drawer's Checklist/Photos tabs stay empty for real jobs until those tables land.
 
+import { PARTNER_CUSTOMER_LABEL, partnerCustomerInitials } from "@/lib/partner-customer";
 import type { Customer, JobSource, JobStatus, MyJob, Trade } from "@/types";
 
 export const JOB_SELECT = [
@@ -45,6 +46,12 @@ export const JOB_SELECT = [
   "partner_timer_accum_paused_ms",
   "partner_timer_is_paused",
   "partner_timer_pause_began_at",
+  "on_hold_reason_preset_id",
+  "on_hold_reason",
+  "on_hold_complaint_description",
+  "on_hold_at",
+  "on_hold_submission_at",
+  "on_hold_previous_status",
 ].join(",");
 
 export interface JobRow {
@@ -86,11 +93,43 @@ export interface JobRow {
   partner_timer_accum_paused_ms: number | null;
   partner_timer_is_paused: boolean | null;
   partner_timer_pause_began_at: string | null;
+  on_hold_reason_preset_id: string | null;
+  on_hold_reason: string | null;
+  on_hold_complaint_description: string | null;
+  on_hold_at: string | null;
+  on_hold_submission_at: string | null;
+  on_hold_previous_status: string | null;
+}
+
+const ON_HOLD_PRESET_LABELS: Record<string, string> = {
+  waiting_materials: "Waiting for materials",
+  client_rescheduled: "Client rescheduled",
+  access_issue: "Access issue",
+  partner_unavailable: "Partner unavailable",
+  awaiting_confirmation: "Awaiting confirmation",
+  complaint: "Complaint",
+  other: "Other",
+};
+
+export function partnerOnHoldLabel(row: Pick<JobRow, "on_hold_reason_preset_id" | "on_hold_reason">): string {
+  const preset = row.on_hold_reason_preset_id?.trim();
+  if (preset === "complaint") return "Complaint";
+  if (preset && ON_HOLD_PRESET_LABELS[preset]) return ON_HOLD_PRESET_LABELS[preset];
+  const reason = row.on_hold_reason?.trim();
+  if (reason && !/^complaint$/i.test(reason)) return reason.split("—")[0].trim();
+  return "On hold";
+}
+
+function partnerOnHoldReasonText(row: JobRow): string | undefined {
+  const desc = row.on_hold_complaint_description?.trim();
+  if (desc) return desc;
+  const reason = row.on_hold_reason?.trim();
+  if (reason) return reason;
+  return undefined;
 }
 
 const STATUS_MAP: Record<string, JobStatus> = {
   scheduled: "scheduled",
-  on_hold: "scheduled",
   unassigned: "scheduled",
   auto_assigning: "scheduled",
   in_progress: "in_progress",
@@ -100,13 +139,6 @@ const STATUS_MAP: Record<string, JobStatus> = {
   completed: "completed",
   cancelled: "cancelled",
 };
-
-function initialsFrom(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
 
 function extractPostcode(address: string | null): string {
   if (!address) return "";
@@ -174,15 +206,16 @@ function elapsedLabel(row: JobRow): string | undefined {
 }
 
 export function mapJob(row: JobRow): MyJob {
-  const status = STATUS_MAP[row.status] ?? "scheduled";
+  const osStatus = row.status;
+  const needsAttention = osStatus === "on_hold";
+  const status = needsAttention ? "scheduled" : (STATUS_MAP[osStatus] ?? "scheduled");
   const total = row.partner_cost ?? row.partner_agreed_value ?? 0;
   const materials = row.materials_cost ?? 0;
   const labour = Math.max(0, total - materials);
-  const name = row.client_name || "Customer";
   const customer: Customer = {
     id: row.client_id || "",
-    name,
-    initials: initialsFrom(name),
+    name: PARTNER_CUSTOMER_LABEL,
+    initials: partnerCustomerInitials(),
     priorJobs: 0,
     address: row.property_address || "",
     postcode: extractPostcode(row.property_address),
@@ -240,5 +273,13 @@ export function mapJob(row: JobRow): MyJob {
     parkingNotes,
     rating: row.customer_review_rating ?? undefined,
     ratingComment: row.customer_review_comment ?? undefined,
+    osStatus,
+    needsAttention,
+    onHoldPresetId: row.on_hold_reason_preset_id?.trim() || undefined,
+    onHoldReason: row.on_hold_reason?.trim() || undefined,
+    onHoldComplaintDescription: partnerOnHoldReasonText(row),
+    onHoldAt: row.on_hold_at || undefined,
+    onHoldSubmissionAt: row.on_hold_submission_at || undefined,
+    onHoldLabel: needsAttention ? partnerOnHoldLabel(row) : undefined,
   };
 }

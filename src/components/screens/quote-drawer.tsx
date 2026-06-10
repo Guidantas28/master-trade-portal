@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { T } from "@/lib/tokens";
 import { Badge, Button, Field, Icon, IconButton, Input } from "@/components/ui/primitives";
+import { QuoteAddressMap } from "@/components/ui/quote-address-map";
 import { formatGBP, formatGBPdec } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { submitBid } from "@/lib/queries/quotes";
@@ -34,14 +35,11 @@ export type QuoteDrawerDetail = {
   myBid?: { amount?: number; status?: string; notes?: string | null } | null;
 };
 
-type Phase = "detail" | "bid";
-
 export function QuoteDrawer({
   quote,
   listStatus,
   partnerId,
   partnerName,
-  initialPhase = "detail",
   onClose,
   onShowToast,
   onChanged,
@@ -50,13 +48,11 @@ export function QuoteDrawer({
   listStatus: QuoteRequestStatus;
   partnerId: string;
   partnerName: string;
-  initialPhase?: Phase;
   onClose: () => void;
   onShowToast: ShowToast;
   onChanged: () => void;
 }) {
   const [closing, setClosing] = useState(false);
-  const [phase, setPhase] = useState<Phase>(initialPhase);
   const [detail, setDetail] = useState<QuoteDrawerDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -142,87 +138,199 @@ export function QuoteDrawer({
         }}
       />
       <div
+        className="quote-drawer-panel"
         style={{
-          position: "absolute",
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: 640,
-          maxWidth: "94vw",
-          background: T.white,
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "-24px 0 48px rgba(2,0,64,0.16)",
           animation: closing
             ? "fx-slide-right 200ms cubic-bezier(0.2,0,0,1) reverse"
             : "fx-slide-right 220ms cubic-bezier(0.2,0,0,1)",
         }}
       >
-        <div style={{ borderBottom: `1px solid ${T.line}`, padding: "14px 20px", display: "flex", alignItems: "center", gap: 12 }}>
+        <div
+          className="quote-drawer-header"
+          style={{
+            borderBottom: `1px solid ${T.line}`,
+            padding: "14px 20px",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexShrink: 0,
+          }}
+        >
           <IconButton icon="x" size={32} tone="ghost" onClick={handleClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 11.5, color: T.mute, display: "flex", alignItems: "center", gap: 8 }}>
-              <span className="fx-mono">{detail?.reference ?? quote.reference ?? quote.id.slice(0, 8)}</span>
-              {detail?.serviceType ? (
-                <>
-                  <span>·</span>
-                  <span>{detail.serviceType}</span>
-                </>
-              ) : null}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span className="fx-mono" style={{ fontSize: 11, color: T.mute }}>
+                {detail?.reference ?? quote.reference ?? quote.id.slice(0, 8)}
+              </span>
+              {(detail?.serviceType || quote.serviceType) && (
+                <Badge tone="soft" size="sm">{detail?.serviceType || quote.serviceType}</Badge>
+              )}
+              {listStatus === "submitted" && <Badge tone="warning" size="sm">Bid submitted</Badge>}
+              {listStatus === "won" && <Badge tone="success" size="sm">Won</Badge>}
             </div>
             <div
+              className="quote-drawer-title"
               style={{
-                fontSize: 17,
-                fontWeight: 500,
+                fontSize: 18,
+                fontWeight: 600,
                 color: T.navy,
-                marginTop: 2,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                marginTop: 4,
+                lineHeight: 1.25,
               }}
             >
               {detail?.title ?? quote.title}
             </div>
           </div>
-          {phase === "bid" ? (
-            <Badge tone="soft" size="sm">
-              {listStatus === "submitted" ? "Update bid" : "Submit quote"}
-            </Badge>
-          ) : null}
         </div>
 
-        <div style={{ flex: 1, overflow: "auto", padding: "20px 20px 8px" }}>
+        <div style={{ flex: 1, overflow: "auto", padding: "0 0 8px" }}>
           {loading ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.mute, fontSize: 13 }}>
-              <Icon name="loader" size={14} /> Loading details…
+            <div style={{ padding: 20, display: "flex", alignItems: "center", gap: 8, color: T.mute, fontSize: 13 }}>
+              <Icon name="loader" size={14} /> Loading quote…
             </div>
           ) : loadError ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+            <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
               <p style={{ fontSize: 13, color: T.coral }}>{loadError}</p>
               <Button variant="secondary" size="sm" icon="refresh-cw" onClick={loadDetail}>
                 Retry
               </Button>
             </div>
-          ) : phase === "bid" && detail ? (
-            <QuoteBidFormBody
-              quote={quote}
-              detail={detail}
-              listStatus={listStatus}
-              partnerId={partnerId}
-              partnerName={partnerName}
-              onShowToast={onShowToast}
-              onSubmitted={() => {
-                onChanged();
-                handleClose();
-              }}
-            />
           ) : detail ? (
-            <QuoteDetailBody detail={detail} listStatus={listStatus} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              <div className="quote-drawer-map-wrap" style={{ padding: "0 0 10px" }}>
+                <QuoteAddressMap
+                  className="quote-drawer-map"
+                  address={detail.propertyAddress}
+                  postcode={detail.postcode || quote.postcode}
+                  minHeight={120}
+                  maxHeight={132}
+                  compact
+                  addressOverlay={detail.propertyAddress || detail.postcode || quote.postcode}
+                />
+              </div>
+
+              <div className="quote-drawer-body-pad" style={{ padding: "0 16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <InfoCard
+                    icon="wrench"
+                    label="Type of work"
+                    value={detail.serviceType || detail.title}
+                    compact
+                  />
+                  {listStatus === "to-quote" && detail.bidWindowHours ? (
+                    <div
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        background: "#FFF7ED",
+                        border: "1px solid #F3D9A4",
+                        fontSize: 12,
+                        lineHeight: 1.4,
+                        color: T.ink,
+                        flex: "1 1 160px",
+                        minWidth: 0,
+                      }}
+                    >
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#9A6B00", textTransform: "uppercase", marginBottom: 2 }}>
+                        {detail.bidWindowHours}h to bid
+                      </div>
+                      {detail.deadline !== "—" ? (
+                        <span style={{ color: T.slate }}>Until {detail.deadline}</span>
+                      ) : (
+                        "Submit before the window closes"
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+
+                {detail.scope ? (
+                  <section>
+                    <SectionLabel>Scope of work</SectionLabel>
+                    <div
+                      className="quote-drawer-scope"
+                      style={{
+                        padding: 12,
+                        borderRadius: 10,
+                        background: T.paper,
+                        border: `1px solid ${T.line}`,
+                        fontSize: 13.5,
+                        lineHeight: 1.5,
+                        color: T.ink,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {detail.scope}
+                    </div>
+                  </section>
+                ) : null}
+
+                {detail.images.length > 0 ? (
+                  <section>
+                    <SectionLabel>Site photos</SectionLabel>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
+                      {detail.images.map((url, i) => (
+                        <a
+                          key={url}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ display: "block", borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}` }}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={url} alt={`Site photo ${i + 1}`} style={{ width: "100%", height: 110, objectFit: "cover", display: "block" }} />
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {canBid ? (
+                  <section>
+                    <SectionLabel>{listStatus === "submitted" ? "Update your proposal" : "Your proposal"}</SectionLabel>
+                    <QuoteBidFormBody
+                      quote={quote}
+                      detail={detail}
+                      listStatus={listStatus}
+                      partnerId={partnerId}
+                      partnerName={partnerName}
+                      onShowToast={onShowToast}
+                      onSubmitted={() => {
+                        onChanged();
+                        handleClose();
+                      }}
+                      embedded
+                    />
+                  </section>
+                ) : listStatus === "won" && detail.myBid?.amount != null ? (
+                  <div
+                    style={{
+                      padding: 16,
+                      borderRadius: 12,
+                      background: T.green50,
+                      border: `1px solid ${T.green}`,
+                      textAlign: "center",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: T.green, fontWeight: 700, letterSpacing: 0.5, marginBottom: 4 }}>AWARDED</div>
+                    <div style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 600, color: T.navy }}>{formatGBP(detail.myBid.amount)}</div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           ) : null}
         </div>
 
-        {phase === "detail" && !loading && !loadError && detail && (
+        {!loading && !loadError && detail && (
           <div
+            className="quote-drawer-footer"
             style={{
               padding: 16,
               borderTop: `1px solid ${T.line}`,
@@ -233,37 +341,18 @@ export function QuoteDrawer({
             }}
           >
             {showDecline ? (
-              <Button variant="secondary" onClick={decline} disabled={declining} style={{ flex: 1 }}>
-                {declining ? "Declining…" : "Decline"}
-              </Button>
-            ) : (
-              <div style={{ flex: 1 }} />
-            )}
-            {canBid ? (
-              <Button variant="primary" icon="send" onClick={() => setPhase("bid")} style={{ flex: 1 }}>
-                {listStatus === "submitted" ? "Update bid" : "Submit quote"}
-              </Button>
-            ) : (
-              <Button variant="secondary" onClick={handleClose} style={{ flex: 1 }}>
+              <div className="quote-drawer-decline">
+                <Button variant="secondary" full onClick={decline} disabled={declining}>
+                  {declining ? "Declining…" : "Decline"}
+                </Button>
+              </div>
+            ) : null}
+            <div style={{ flex: 1 }} />
+            {!canBid && (
+              <Button variant="secondary" onClick={handleClose}>
                 Close
               </Button>
             )}
-          </div>
-        )}
-
-        {phase === "bid" && detail && (
-          <div
-            style={{
-              padding: 16,
-              borderTop: `1px solid ${T.line}`,
-              background: T.paper,
-              display: "flex",
-              gap: 10,
-            }}
-          >
-            <Button variant="secondary" onClick={() => setPhase("detail")} style={{ flex: 1 }}>
-              Back
-            </Button>
           </div>
         )}
       </div>
@@ -271,143 +360,40 @@ export function QuoteDrawer({
   );
 }
 
-function QuoteDetailBody({
-  detail,
-  listStatus,
-}: {
-  detail: QuoteDrawerDetail;
-  listStatus: QuoteRequestStatus;
-}) {
+function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {listStatus === "to-quote" && detail.bidWindowHours ? (
-        <div
-          style={{
-            padding: 14,
-            borderRadius: 10,
-            background: "#FFF7ED",
-            border: "1px solid #F3D9A4",
-            fontSize: 13,
-            lineHeight: 1.5,
-            color: T.ink,
-          }}
-        >
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#9A6B00", textTransform: "uppercase", marginBottom: 4 }}>
-            Bid deadline
-          </div>
-          This quote expires in <strong>{detail.bidWindowHours} hours</strong>
-          {detail.deadline !== "—" ? (
-            <>
-              {" "}
-              — submit by <strong>{detail.deadline}</strong>
-            </>
-          ) : null}
-          .
-        </div>
-      ) : null}
-
-      <section>
-        <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: T.mute, textTransform: "uppercase", marginBottom: 10 }}>
-          Opportunity details
-        </p>
-        <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, overflow: "hidden" }}>
-          <DetailRow label="Client" value={detail.clientName} />
-          <DetailRow label="Address" value={detail.propertyAddress || "—"} sub={detail.postcode} />
-          <DetailRow label="Type of work" value={detail.serviceType || detail.title} last />
-        </div>
-      </section>
-
-      {detail.scope ? (
-        <section>
-          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: T.mute, textTransform: "uppercase", marginBottom: 8 }}>
-            Scope
-          </p>
-          <div
-            style={{
-              padding: 14,
-              borderRadius: 10,
-              background: T.paper,
-              fontSize: 14,
-              lineHeight: 1.55,
-              color: T.ink,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {detail.scope}
-          </div>
-        </section>
-      ) : null}
-
-      <section>
-        <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: T.mute, textTransform: "uppercase", marginBottom: 10 }}>
-          Site photos
-        </p>
-        {detail.images.length === 0 ? (
-          <p style={{ fontSize: 13, color: T.mute, fontStyle: "italic" }}>No site photos attached from the office.</p>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
-            {detail.images.map((url, i) => (
-              <a
-                key={url}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "block",
-                  borderRadius: 10,
-                  overflow: "hidden",
-                  border: `1px solid ${T.line}`,
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={url}
-                  alt={`Site photo ${i + 1}`}
-                  style={{ width: "100%", height: 120, objectFit: "cover", display: "block" }}
-                />
-              </a>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
+    <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: T.mute, textTransform: "uppercase", marginBottom: 10 }}>
+      {children}
+    </p>
   );
 }
 
-function DetailRow({
+function InfoCard({
+  icon,
   label,
   value,
-  sub,
-  last,
+  compact,
 }: {
+  icon: string;
   label: string;
   value: string;
-  sub?: string;
-  last?: boolean;
+  compact?: boolean;
 }) {
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "120px 1fr",
-        gap: 8,
-        padding: "12px 14px",
-        borderBottom: last ? undefined : `1px solid ${T.line}`,
-        fontSize: 14,
+        padding: compact ? "8px 10px" : 12,
+        borderRadius: 10,
+        border: `1px solid ${T.line}`,
+        background: T.paper,
+        flex: compact ? "1 1 140px" : undefined,
+        minWidth: 0,
       }}
     >
-      <span style={{ fontSize: 11, fontWeight: 700, color: T.mute, textTransform: "uppercase", letterSpacing: 0.5 }}>
-        {label}
-      </span>
-      <span style={{ color: T.ink, lineHeight: 1.45 }}>
-        {value}
-        {sub ? (
-          <>
-            <br />
-            <span style={{ color: T.slate, fontSize: 13 }}>{sub}</span>
-          </>
-        ) : null}
-      </span>
+      <div style={{ fontSize: 10, fontWeight: 700, color: T.mute, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
+        <Icon name={icon} size={11} /> {label}
+      </div>
+      <div style={{ fontSize: compact ? 13 : 13.5, fontWeight: 500, color: T.ink, lineHeight: 1.35 }}>{value || "—"}</div>
     </div>
   );
 }
@@ -420,6 +406,7 @@ function QuoteBidFormBody({
   partnerName,
   onShowToast,
   onSubmitted,
+  embedded,
 }: {
   quote: QuoteRequest;
   detail: QuoteDrawerDetail;
@@ -428,6 +415,7 @@ function QuoteBidFormBody({
   partnerName: string;
   onShowToast: ShowToast;
   onSubmitted: () => void;
+  embedded?: boolean;
 }) {
   const isUpdate = listStatus === "submitted";
   const initial = bidFormValuesFromNotes(detail.myBid?.notes ?? quote.myBidNotes);
@@ -454,6 +442,7 @@ function QuoteBidFormBody({
     outline: "none",
     resize: "vertical" as const,
     boxSizing: "border-box" as const,
+    background: T.white,
   };
 
   const send = async () => {
@@ -501,13 +490,22 @@ function QuoteBidFormBody({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, paddingBottom: 8 }}>
-      <p style={{ fontSize: 12, color: T.mute, lineHeight: 1.45 }}>
-        Required fields match Fixfy OS — labour and materials notes, scope, and two start dates so the office can send the
-        customer proposal after approval.
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        padding: embedded ? 16 : 0,
+        borderRadius: embedded ? 12 : 0,
+        border: embedded ? `1px solid ${T.line}` : undefined,
+        background: embedded ? T.white : undefined,
+      }}
+    >
+      <p style={{ fontSize: 12, color: T.mute, lineHeight: 1.45, margin: 0 }}>
+        All prices are <strong>inc VAT</strong>. Labour and materials notes, scope, and two available start dates are sent to Fixfy OS for the customer proposal.
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div className="quote-drawer-form-grid">
         <Field label="Labour (£ inc VAT) *">
           <Input value={labour} onChange={setLabour} prefix="£" />
         </Field>
@@ -516,20 +514,20 @@ function QuoteBidFormBody({
         </Field>
       </div>
 
-      <Field label="Labour line notes *">
+      <Field label="Labour notes *">
         <textarea
           value={labourNotes}
           onChange={(e) => setLabourNotes(e.target.value)}
-          placeholder="What labour includes — hours, trades on site, prep, clean-down…"
+          placeholder="Hours on site, trades, prep, clean-down…"
           style={textareaStyle}
         />
       </Field>
 
-      <Field label="Materials line notes *">
+      <Field label="Materials notes *">
         <textarea
           value={materialsNotes}
           onChange={(e) => setMaterialsNotes(e.target.value)}
-          placeholder="Materials included, allowances, or state if customer supplies materials…"
+          placeholder="Materials included, allowances, or customer supplies…"
           style={textareaStyle}
         />
       </Field>
@@ -537,38 +535,29 @@ function QuoteBidFormBody({
       <div
         style={{
           padding: 14,
-          background: T.paper,
+          background: T.paper2,
           borderRadius: 10,
           border: `1px solid ${T.line}`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
         }}
       >
-        <div>
-          <div style={{ fontSize: 11, color: T.mute, letterSpacing: 0.4 }}>YOUR TOTAL</div>
-          <div style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 500, color: T.navy }}>{formatGBPdec(total)}</div>
-        </div>
-        <div style={{ fontSize: 12, color: T.mute, textAlign: "right" }}>
-          <div>Net-7 from sign-off</div>
-          <div className="fx-mono">~{formatGBP(total * 0.83)} after VAT</div>
-        </div>
+        <div style={{ fontSize: 11, color: T.mute, letterSpacing: 0.4 }}>TOTAL INC VAT</div>
+        <div style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 600, color: T.navy }}>{formatGBPdec(total)}</div>
       </div>
 
-      <Field label="Scope of work (for customer email / PDF) *">
+      <Field label="Scope for customer proposal *">
         <textarea
           value={scope}
           onChange={(e) => setScope(e.target.value)}
-          placeholder="Describe the work you will carry out, assumptions, and exclusions…"
+          placeholder="Work you'll carry out, assumptions, exclusions…"
           style={{ ...textareaStyle, minHeight: 90 }}
         />
       </Field>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="Start date option 1 *">
+      <div className="quote-drawer-form-grid">
+        <Field label="Available start date 1 *">
           <input type="date" value={startDate1} onChange={(e) => setStartDate1(e.target.value)} style={dateInputStyle} />
         </Field>
-        <Field label="Start date option 2 *">
+        <Field label="Available start date 2 *">
           <input type="date" value={startDate2} onChange={(e) => setStartDate2(e.target.value)} style={dateInputStyle} />
         </Field>
       </div>
@@ -577,13 +566,13 @@ function QuoteBidFormBody({
         <textarea
           value={coverNote}
           onChange={(e) => setCoverNote(e.target.value)}
-          placeholder="Anything else the customer should know — site visit recommended, access notes…"
+          placeholder="Access notes, site visit recommended, parking…"
           style={textareaStyle}
         />
       </Field>
 
       <Button variant="primary" icon="send" onClick={send} disabled={submitting || total <= 0} style={{ width: "100%" }}>
-        {submitting ? "Sending…" : isUpdate ? "Update bid" : "Send quote"}
+        {submitting ? "Sending…" : isUpdate ? "Update bid" : "Submit quote"}
       </Button>
     </div>
   );

@@ -95,6 +95,8 @@ export interface QuoteRequest {
   title: string;
   desc: string;
   trades: Trade[];
+  serviceType?: string;
+  propertyAddress?: string;
   postcode: string;
   distance: number;
   deadline: string;
@@ -158,6 +160,18 @@ export interface MyJob {
   rating?: number;
   ratingComment?: string;
   selfBillOn?: string;
+  /** Raw jobs.status from OS (before portal board mapping). */
+  osStatus: string;
+  /** Job is on hold and needs partner action. */
+  needsAttention: boolean;
+  onHoldPresetId?: string;
+  onHoldReason?: string;
+  onHoldComplaintDescription?: string;
+  onHoldAt?: string;
+  /** Set when partner submitted on-hold response via portal or email link. */
+  onHoldSubmissionAt?: string;
+  /** Human label for on-hold preset (e.g. Complaint, Access issue). */
+  onHoldLabel?: string;
 }
 
 export type ActivityTone = "coral" | "amber" | "green" | "navy";

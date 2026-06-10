@@ -12,7 +12,9 @@ import { StripeMark } from "@/components/brand/stripe-mark";
 import { ServiceAreaMap } from "@/components/ui/service-area-map";
 import { SignaturePad } from "@/components/ui/signature-pad";
 import { useToast } from "@/components/ui/toast";
+import { PartnerRatingCard } from "@/components/ui/partner-rating";
 import { usePartner } from "@/components/partner-context";
+import { usePartnerRating } from "@/hooks/use-partner-rating";
 import { createClient } from "@/lib/supabase/client";
 import { formatGBPdec } from "@/lib/format";
 import {
@@ -26,6 +28,7 @@ import {
 import { SERVICE_CATEGORY_ORDER, serviceCategory } from "@/lib/service-category";
 import { fetchSelfBills, type SelfBill } from "@/lib/queries/self-bills";
 import { fetchPartnerDocuments, type PartnerDoc } from "@/lib/queries/partner-documents";
+import { hydrateContractHtml } from "@/lib/contract-branding";
 import { fetchContracts, type PartnerContract } from "@/lib/queries/contracts";
 import { fetchRateCard, saveRateCard, type ServicePrice } from "@/lib/queries/rate-card";
 import { formatCatalogPartnerPay } from "@/lib/catalog-partner-pay";
@@ -200,6 +203,7 @@ function ToggleRow({ on, onChange, label, hint }: { on: boolean; onChange: (v: b
 // bio and years_experience (migration 204). DOB/company number/VAT number have no column yet.
 function ProfilePage() {
   const partner = usePartner();
+  const { rating, complaintCount, pointsLost, topComplaints, loaded: ratingLoaded } = usePartnerRating(partner.rating);
   const toast = useToast();
   const initial = {
     firstName: partner.firstName,
@@ -242,6 +246,9 @@ function ProfilePage() {
   return (
     <>
       <SettingsHeader title="Profile" subtitle="What customers see on your job reports." />
+      {ratingLoaded && (
+        <PartnerRatingCard rating={rating} complaintCount={complaintCount} pointsLost={pointsLost} topComplaints={topComplaints} />
+      )}
       <PageCard title="About you">
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
           <Avatar initials={partner.initials} size={72} bg={T.navy} />
@@ -1225,7 +1232,7 @@ function daysLeft(iso: string | null): number {
 const PRO_FEATURES = [
   "0% commission on every job",
   "Unlimited leads and jobs",
-  "Card-to-bank payouts (Net-7)",
+  "Card-to-bank payouts",
   "Self-bill PDFs auto-generated",
   "Customer report templates",
   "24/7 emergency dispatch",
@@ -2095,6 +2102,7 @@ function DocUploadCard({ busy, onUpload }: { busy: boolean; onUpload: (name: str
 const CONTRACT_ICON: Record<string, string> = {
   terms_of_use: "gavel",
   self_bill_agreement: "receipt",
+  contractor_service_agreement: "file-signature",
 };
 
 export function PoliciesPage() {
@@ -2105,31 +2113,51 @@ export function PoliciesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState<PartnerContract | null>(null);
-  const [signing, setSigning] = useState<PartnerContract | null>(null);
+  const [bulkSigning, setBulkSigning] = useState(false);
   const [sig, setSig] = useState<string | null>(null);
   const [signerName, setSignerName] = useState(`${partner.firstName} ${partner.lastName}`.trim());
   const [signBusy, setSignBusy] = useState(false);
 
-  const submitSignature = async () => {
-    if (!signing || !sig || !signerName.trim()) return;
+  const visibleContracts = contracts.filter((c) => !isEmploymentContract(c));
+  const unsignedContracts = visibleContracts.filter((c) => !c.signed);
+  const allSigned = visibleContracts.length > 0 && unsignedContracts.length === 0;
+
+  const submitBulkSignature = async () => {
+    if (!sig || !signerName.trim() || unsignedContracts.length === 0) return;
     setSignBusy(true);
     try {
-      const res = await fetch("/api/contracts/sign", {
+      const res = await fetch("/api/contracts/sign-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contractVersionId: signing.versionId,
-          contractType: signing.type,
-          signatureDataUrl: sig,
+          signatureImageBase64: sig,
           signerName: signerName.trim(),
+          deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't sign");
       const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-      setContracts((prev) => prev.map((c) => (c.versionId === signing.versionId ? { ...c, signed: true, signedAt: today } : c)));
-      toast({ text: "Contract signed", icon: "check" });
-      setSigning(null);
+      const signedByVersion = new Map(
+        (json.contracts as Array<{ contractVersionId: string; signaturePdfUrl: string | null }> | undefined)?.map((r) => [
+          r.contractVersionId,
+          r.signaturePdfUrl,
+        ]) ?? [],
+      );
+      setContracts((prev) =>
+        prev.map((c) =>
+          signedByVersion.has(c.versionId) || unsignedContracts.some((u) => u.versionId === c.versionId)
+            ? {
+                ...c,
+                signed: true,
+                signedAt: today,
+                signaturePdfUrl: signedByVersion.get(c.versionId) ?? c.signaturePdfUrl,
+              }
+            : c,
+        ),
+      );
+      toast({ text: "All agreements signed", icon: "check" });
+      setBulkSigning(false);
       setSig(null);
     } catch (e) {
       toast({ text: e instanceof Error ? e.message : "Couldn't sign", icon: "alert-triangle", tone: "coral" });
@@ -2137,6 +2165,13 @@ export function PoliciesPage() {
       setSignBusy(false);
     }
   };
+
+  useRegisterOnboardingSave(async () => {
+    if (loading) return false;
+    if (allSigned) return true;
+    toast({ text: "Sign all agreements before continuing", icon: "alert-triangle", tone: "coral" });
+    return false;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -2166,48 +2201,77 @@ export function PoliciesPage() {
         </div>
       ) : error ? (
         <div style={{ padding: 8, color: T.coral, fontSize: 13 }}>{error}</div>
-      ) : contracts.length === 0 ? (
+      ) : visibleContracts.length === 0 ? (
         <div style={{ padding: 8, color: T.mute, fontSize: 13 }}>No active contracts published.</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          {contracts.filter((c) => !isEmploymentContract(c)).map((c) => (
-            <Card key={c.versionId} style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
+        <>
+          {unsignedContracts.length > 0 && (
+            <Card style={{ padding: 16, marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>
+                  {unsignedContracts.length} agreement{unsignedContracts.length === 1 ? "" : "s"} to sign
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
+                <div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>
+                  One signature covers all agreements below. Read each one first if you need to.
                 </div>
-                {c.signed ? (
-                  <Badge tone="success" size="sm" icon="check">Signed</Badge>
-                ) : (
-                  <Badge tone="warning" size="sm">Pending</Badge>
-                )}
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)} style={{ flex: 1 }}>
-                  Read
-                </Button>
-                {!c.signed && (
-                  <Button variant="primary" size="sm" icon="pen-line" onClick={() => { setSig(null); setSigning(c); }} style={{ flex: 1 }}>
-                    Sign
-                  </Button>
-                )}
-              </div>
+              <Button variant="primary" icon="pen-line" onClick={() => { setSig(null); setBulkSigning(true); }}>
+                Sign all agreements
+              </Button>
             </Card>
-          ))}
-        </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {visibleContracts.map((c) => (
+              <Card key={c.versionId} style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 9, background: T.paper2, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon name={CONTRACT_ICON[c.type] ?? "gavel"} size={18} color={T.navy} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{c.title}</div>
+                  </div>
+                  {c.signed ? (
+                    <Badge tone="success" size="sm" icon="check">Signed</Badge>
+                  ) : (
+                    <Badge tone="warning" size="sm">Pending</Badge>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Button variant="ghost" size="sm" iconRight="arrow-up-right" onClick={() => setReading(c)} style={{ flex: 1, minWidth: 100 }}>
+                    Read
+                  </Button>
+                  {c.signed && c.signaturePdfUrl ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon="download"
+                      onClick={() => window.open(c.signaturePdfUrl!, "_blank", "noopener,noreferrer")}
+                      style={{ flex: 1, minWidth: 100 }}
+                    >
+                      PDF
+                    </Button>
+                  ) : null}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
 
-      {signing && (
-        <Modal title={`Sign — ${signing.title}`} onClose={() => setSigning(null)} width={520}>
+      {bulkSigning && (
+        <Modal title="Sign all agreements" onClose={() => setBulkSigning(false)} width={520}>
           <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontSize: 12.5, color: T.slate, lineHeight: 1.5 }}>
-              By signing you agree to the {signing.title}
-              {signing.version ? ` (v${signing.version})` : ""}. Your name, the time, your IP and device are recorded for a
-              legally-valid UK e-signature.
+              By signing once below you agree to all of the following. Your name, the time, your IP and device are recorded
+              for a legally-valid UK e-signature on each agreement.
             </div>
+            <Card style={{ padding: 12, background: T.paper2 }}>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: T.ink, lineHeight: 1.6 }}>
+                {unsignedContracts.map((c) => (
+                  <li key={c.versionId}>{c.title}{c.version ? ` (v${c.version})` : ""}</li>
+                ))}
+              </ul>
+            </Card>
             <div>
               <div style={{ fontSize: 12, fontWeight: 500, color: T.ink, marginBottom: 6 }}>Full name</div>
               <Input value={signerName} onChange={setSignerName} placeholder="Your full legal name" />
@@ -2216,17 +2280,11 @@ export function PoliciesPage() {
               <div style={{ fontSize: 12, fontWeight: 500, color: T.ink, marginBottom: 6 }}>Signature</div>
               <SignaturePad onChange={setSig} />
             </div>
-            <button
-              style={{ alignSelf: "flex-start", padding: 0, background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: 8, alignItems: "flex-start" }}
-            >
-              <Icon name="info" size={13} color={T.mute} />
-              <span style={{ fontSize: 11.5, color: T.mute, textAlign: "left" }}>Read the full text first via the Read button.</span>
-            </button>
           </div>
           <div style={{ padding: 16, borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Button variant="secondary" onClick={() => setSigning(null)} disabled={signBusy}>Cancel</Button>
-            <Button variant="primary" icon="check" onClick={submitSignature} disabled={signBusy || !sig || !signerName.trim()}>
-              {signBusy ? "Signing…" : "Agree & sign"}
+            <Button variant="secondary" onClick={() => setBulkSigning(false)} disabled={signBusy}>Cancel</Button>
+            <Button variant="primary" icon="check" onClick={submitBulkSignature} disabled={signBusy || !sig || !signerName.trim()}>
+              {signBusy ? "Signing…" : "Agree & sign all"}
             </Button>
           </div>
         </Modal>
@@ -2236,7 +2294,7 @@ export function PoliciesPage() {
         <Modal title={reading.title} onClose={() => setReading(null)} width={680}>
           <div style={{ padding: 20, maxHeight: "60vh", overflow: "auto", fontSize: 13, color: T.ink, lineHeight: 1.6 }}>
             {reading.bodyHtml ? (
-              <div dangerouslySetInnerHTML={{ __html: reading.bodyHtml }} />
+              <div dangerouslySetInnerHTML={{ __html: hydrateContractHtml(reading.bodyHtml) }} />
             ) : (
               <div style={{ color: T.mute }}>No contract text available.</div>
             )}
