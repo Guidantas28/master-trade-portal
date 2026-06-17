@@ -256,20 +256,24 @@ function Alert({ tone, children }: { tone: "error" | "dev"; children: ReactNode 
 
 function SignInFlow({
   initialEmail = "",
+  inviteCode = "",
   onRegister,
   onSendCode,
   onVerify,
   busy,
   error,
   devNote,
+  inviteBanner,
 }: {
   initialEmail?: string;
+  inviteCode?: string;
   onRegister: () => void;
-  onSendCode: (email: string) => Promise<string | null>;
+  onSendCode: (email: string, inviteCode?: string) => Promise<string | null>;
   onVerify: (email: string, code: string) => Promise<void>;
   busy: boolean;
   error: string | null;
   devNote: string | null;
+  inviteBanner?: string | null;
 }) {
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState(initialEmail);
@@ -282,7 +286,7 @@ function SignInFlow({
 
   const send = async () => {
     if (!valid || busy) return;
-    const otp = await onSendCode(email.trim());
+    const otp = await onSendCode(email.trim(), inviteCode || undefined);
     setStep("code");
     if (otp) setCode(otp);
   };
@@ -361,6 +365,11 @@ function SignInFlow({
       <p style={{ fontSize: 14, color: T.mute, margin: "8px 0 24px", lineHeight: 1.5 }}>
         We&apos;ll email you a 6-digit sign-in code. No password to remember.
       </p>
+      {inviteBanner && (
+        <div style={{ marginBottom: 16, fontSize: 13, color: T.slate, background: T.coralTint, borderRadius: 8, padding: "10px 12px", lineHeight: 1.45 }}>
+          {inviteBanner}
+        </div>
+      )}
       <AuthField label="Work email" icon="mail" type="email" placeholder="you@company.co.uk" value={email} onChange={setEmail} />
       <div style={{ marginTop: 16 }}>
         <PrimaryBtn disabled={busy || !valid} onClick={send}>
@@ -412,24 +421,45 @@ function RegisterFlow({
   busy,
   error,
   devNote,
+  initialFullName = "",
+  initialCompany = "",
+  initialEmail = "",
+  inviteCode = "",
+  inviteBanner,
 }: {
   onSignIn: () => void;
-  onCreateAccount: (data: { fullName: string; company: string; email: string }) => Promise<string | null>;
+  onCreateAccount: (data: { fullName: string; company: string; email: string; inviteCode?: string }) => Promise<string | null>;
   onVerify: (email: string, code: string) => Promise<void>;
   busy: boolean;
   error: string | null;
   devNote: string | null;
+  initialFullName?: string;
+  initialCompany?: string;
+  initialEmail?: string;
+  inviteCode?: string;
+  inviteBanner?: string | null;
 }) {
   const [step, setStep] = useState<"details" | "code">("details");
-  const [fullName, setFullName] = useState("");
-  const [company, setCompany] = useState("");
-  const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState(initialFullName);
+  const [company, setCompany] = useState(initialCompany);
+  const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState("");
   const valid = fullName.trim() && company.trim() && isEmail(email);
 
+  useEffect(() => {
+    if (initialFullName) setFullName(initialFullName);
+    if (initialCompany) setCompany(initialCompany);
+    if (initialEmail && isEmail(initialEmail)) setEmail(initialEmail);
+  }, [initialFullName, initialCompany, initialEmail]);
+
   const create = async () => {
     if (!valid || busy) return;
-    const otp = await onCreateAccount({ fullName: fullName.trim(), company: company.trim(), email: email.trim() });
+    const otp = await onCreateAccount({
+      fullName: fullName.trim(),
+      company: company.trim(),
+      email: email.trim(),
+      inviteCode: inviteCode || undefined,
+    });
     setStep("code");
     if (otp) setCode(otp);
   };
@@ -504,10 +534,19 @@ function RegisterFlow({
         if (e.key === "Enter" && valid) create();
       }}
     >
-      <h2 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.02em", color: T.ink, margin: 0 }}>Create your account</h2>
+      <h2 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.02em", color: T.ink, margin: 0 }}>
+        {inviteCode ? "Complete your account" : "Create your account"}
+      </h2>
       <p style={{ fontSize: 14, color: T.mute, margin: "8px 0 22px", lineHeight: 1.5 }}>
-        Start a 30-day free trial. No card required.
+        {inviteCode
+          ? "Confirm your details — we'll email you a code to sign in and finish onboarding."
+          : "Start a 30-day free trial. No card required."}
       </p>
+      {inviteBanner && (
+        <div style={{ marginBottom: 14, fontSize: 13, color: T.slate, background: T.coralTint, borderRadius: 8, padding: "10px 12px", lineHeight: 1.45 }}>
+          {inviteBanner}
+        </div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <AuthField label="Full name" icon="user" placeholder="Jordan Maguire" value={fullName} onChange={setFullName} />
         <AuthField label="Company / trading name" icon="briefcase" placeholder="Maguire Plumbing Ltd" value={company} onChange={setCompany} />
@@ -562,15 +601,57 @@ function RegisterFlow({
 export function AuthBrandToggle({
   initialMode = "signin",
   initialEmail = "",
+  initialInviteCode = "",
+  initialInviteError = false,
 }: {
   initialMode?: "signin" | "register";
   initialEmail?: string;
+  initialInviteCode?: string;
+  initialInviteError?: boolean;
 }) {
   const router = useRouter();
-  const [mode, setMode] = useState<"signin" | "register">(initialMode);
+  const [mode, setMode] = useState<"signin" | "register">(initialInviteCode ? "register" : initialMode);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    initialInviteError
+      ? "This invite link has expired or couldn't sign you in automatically. Request a new invite from Fixfy, or continue below with your email."
+      : null,
+  );
   const [devNote, setDevNote] = useState<string | null>(null);
+  const [inviteCode] = useState(initialInviteCode);
+  const [invitePrefill, setInvitePrefill] = useState({
+    fullName: "",
+    company: "",
+    email: initialEmail,
+  });
+  const [inviteBanner, setInviteBanner] = useState<string | null>(
+    initialInviteCode ? "You've been invited to join Fixfy Trade." : null,
+  );
+
+  useEffect(() => {
+    if (!initialInviteCode) return;
+    void fetch(`/api/auth/invite?code=${encodeURIComponent(initialInviteCode)}`)
+      .then((r) => r.json())
+      .then((data: { ok?: boolean; email?: string; contactName?: string; companyName?: string; hasAuth?: boolean; error?: string }) => {
+        if (!data.ok) {
+          setError(data.error || "This invite link has expired or is invalid.");
+          return;
+        }
+        setInvitePrefill({
+          email: data.email || initialEmail,
+          fullName: data.contactName || "",
+          company: data.companyName || data.contactName || "",
+        });
+        if (data.hasAuth) {
+          setMode("signin");
+          setInviteBanner("Welcome back — sign in with your email to continue onboarding.");
+        } else {
+          setMode("register");
+          setInviteBanner("You've been invited to join Fixfy Trade. Complete your account to start onboarding.");
+        }
+      })
+      .catch(() => setError("Couldn't load your invite. Try the link from your email again."));
+  }, [initialInviteCode, initialEmail]);
 
   useEffect(() => {
     setMode(initialMode);
@@ -581,7 +662,7 @@ export function AuthBrandToggle({
     setDevNote(null);
   };
 
-  const sendCode = async (email: string): Promise<string | null> => {
+  const sendCode = async (email: string, code?: string): Promise<string | null> => {
     clearMessages();
     setBusy(true);
     let returnedCode: string | null = null;
@@ -589,7 +670,7 @@ export function AuthBrandToggle({
       const res = await fetch("/api/auth/request-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, inviteCode: code || inviteCode || undefined }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -633,7 +714,7 @@ export function AuthBrandToggle({
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) throw new Error(data.error || "That code didn't work.");
-      router.replace("/");
+      router.replace(inviteCode ? "/?welcome=1" : "/");
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "That code didn't work.");
@@ -642,15 +723,30 @@ export function AuthBrandToggle({
     }
   };
 
-  const createAccount = async (payload: { fullName: string; company: string; email: string }): Promise<string | null> => {
+  const createAccount = async (payload: {
+    fullName: string;
+    company: string;
+    email: string;
+    inviteCode?: string;
+  }): Promise<string | null> => {
     clearMessages();
     setBusy(true);
     let returnedCode: string | null = null;
     try {
-      const res = await fetch("/api/auth/signup", {
+      const useInvite = payload.inviteCode || inviteCode;
+      const endpoint = useInvite ? "/api/auth/claim-invite" : "/api/auth/signup";
+      const body = useInvite
+        ? {
+            email: payload.email,
+            fullName: payload.fullName,
+            company: payload.company,
+            inviteCode: useInvite,
+          }
+        : payload;
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; devCode?: string; emailError?: string };
       if (!res.ok || !data.ok) throw new Error(data.error || "Couldn't create your account.");
@@ -832,7 +928,9 @@ export function AuthBrandToggle({
           </div>
           {mode === "signin" ? (
             <SignInFlow
-              initialEmail={initialEmail}
+              initialEmail={invitePrefill.email || initialEmail}
+              inviteCode={inviteCode}
+              inviteBanner={inviteBanner}
               onRegister={() => switchMode("register")}
               onSendCode={sendCode}
               onVerify={verifySignIn}
@@ -842,6 +940,11 @@ export function AuthBrandToggle({
             />
           ) : (
             <RegisterFlow
+              initialFullName={invitePrefill.fullName}
+              initialCompany={invitePrefill.company}
+              initialEmail={invitePrefill.email || initialEmail}
+              inviteCode={inviteCode}
+              inviteBanner={inviteBanner}
               onSignIn={() => switchMode("signin")}
               onCreateAccount={createAccount}
               onVerify={verifySignup}

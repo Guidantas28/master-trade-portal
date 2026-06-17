@@ -24,6 +24,7 @@ export interface PartnerRow {
   // present once their migrations land (read best-effort by partner-auth):
   trial_ends_at?: string | null;
   subscription_status?: string | null;
+  status?: string | null;
   bio?: string | null;
   years_experience?: number | null;
   service_radius_miles?: number | null;
@@ -70,5 +71,6 @@ export function mapPartner(row: PartnerRow): Partner {
     excludedPostcodes: row.excluded_postcodes ?? [],
     rating: displayPartnerRating(row.rating),
     ratingsCount: row.jobs_completed ?? 0,
+    status: row.status?.trim() || "onboarding",
   };
 }

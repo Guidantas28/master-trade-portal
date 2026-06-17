@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { mapPartner, type PartnerRow } from "@/lib/map-partner";
 import type { Partner } from "@/types";
 
-const BASE_COLS = "id, company_name, contact_name, email, phone, trade, trades, rating, jobs_completed, location, partner_address, avatar_url";
+const BASE_COLS = "id, company_name, contact_name, email, phone, trade, trades, rating, jobs_completed, location, partner_address, avatar_url, status";
 
 export interface PartnerSession {
   userId: string;
