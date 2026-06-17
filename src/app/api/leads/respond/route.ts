@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 import { partnerMissingRequiredDocs } from "@/lib/partner-docs-gate";
+import { partnerWorkAccessBlocked } from "@/lib/partner-access-gate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,7 +42,12 @@ export async function POST(req: Request) {
     );
   }
 
-  // Idempotent on the (lead_id, partner_id) unique constraint — upsert+ignoreDuplicates so two
+  const workBlocked = await partnerWorkAccessBlocked(svc, session.partnerId);
+  if (workBlocked) {
+    return NextResponse.json({ error: workBlocked, code: "account_not_active" }, { status: 403 });
+  }
+
+  // Idempotent on the (lead_id, partner_id) unique constraint
   // concurrent "Contact" clicks can't 500 on a race. offered_by is FK → public.profiles(id)
   // (staff); a partner self-contacting isn't a profile, so leave it null.
   let upsertPayload: Record<string, unknown> = {

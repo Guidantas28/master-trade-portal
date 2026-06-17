@@ -6,6 +6,7 @@
 // portal resolves from the session (partner-auth) is this same partners row.
 
 import { NextResponse, type NextRequest } from "next/server";
+import { claimPartnerInvite } from "@/lib/partner-auth-claim";
 import { createServiceClient } from "@/lib/supabase/service";
 import { sendOtpEmail } from "@/lib/email";
 
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 const TRIAL_DAYS = 30;
 
 export async function POST(req: NextRequest) {
-  let body: { email?: unknown; fullName?: unknown; company?: unknown };
+  let body: { email?: unknown; fullName?: unknown; company?: unknown; inviteCode?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -24,6 +25,7 @@ export async function POST(req: NextRequest) {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
   const company = typeof body.company === "string" ? body.company.trim() : "";
+  const inviteCode = typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
 
   if (!email || !email.includes("@")) return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
   if (!fullName) return NextResponse.json({ error: "Enter your name." }, { status: 400 });
@@ -31,12 +33,45 @@ export async function POST(req: NextRequest) {
 
   const admin = createServiceClient();
 
-  // Already registered? Send them to sign-in instead of creating a duplicate.
-  const [existingUser, existingPartner] = await Promise.all([
-    admin.from("users").select("id").ilike("email", email).limit(1),
-    admin.from("partners").select("id").ilike("email", email).limit(1),
-  ]);
-  if ((existingUser.data?.length ?? 0) > 0 || (existingPartner.data?.length ?? 0) > 0) {
+  const { data: existingPartnerRows } = await admin
+    .from("partners")
+    .select("id, auth_user_id, status")
+    .ilike("email", email)
+    .limit(1);
+  const existingPartner = existingPartnerRows?.[0] as {
+    id: string;
+    auth_user_id?: string | null;
+    status?: string | null;
+  } | undefined;
+
+  if (existingPartner?.auth_user_id?.trim()) {
+    return NextResponse.json({ error: "That email is already registered. Sign in instead." }, { status: 409 });
+  }
+
+  if (existingPartner?.id) {
+    if (!inviteCode) {
+      return NextResponse.json(
+        { error: "You were invited by Fixfy. Open the invite link from your email to continue." },
+        { status: 409 },
+      );
+    }
+    try {
+      const result = await claimPartnerInvite(admin, { email, inviteCode, fullName, company });
+      const dev = process.env.NODE_ENV !== "production";
+      return NextResponse.json({
+        ok: true,
+        claimed: true,
+        ...(dev && result.devCode ? { devCode: result.devCode } : {}),
+        ...(dev && result.emailError ? { emailError: result.emailError } : {}),
+      });
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      return NextResponse.json({ error: err.message || "Couldn't claim invite." }, { status: err.status ?? 500 });
+    }
+  }
+
+  const { data: existingUser } = await admin.from("users").select("id").ilike("email", email).limit(1);
+  if ((existingUser?.length ?? 0) > 0) {
     return NextResponse.json({ error: "That email is already registered. Sign in instead." }, { status: 409 });
   }
 

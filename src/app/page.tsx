@@ -6,7 +6,7 @@ import { TradePortalApp } from "@/components/app";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ email?: string }>;
+  searchParams: Promise<{ email?: string; invite?: string }>;
 }) {
   const session = await getPartnerSession();
 
@@ -14,7 +14,12 @@ export default async function Page({
   if (!session) {
     const sp = await searchParams;
     const email = sp.email?.trim();
-    redirect(email ? `/login?email=${encodeURIComponent(email)}` : "/login");
+    const invite = sp.invite?.trim();
+    const params = new URLSearchParams();
+    if (email) params.set("email", email);
+    if (invite) params.set("invite", invite);
+    const qs = params.toString();
+    redirect(qs ? `/login?${qs}` : "/login");
   }
 
   return (

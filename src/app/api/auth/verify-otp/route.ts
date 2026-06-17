@@ -4,6 +4,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,20 @@ export async function POST(req: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
     if (user) {
-      const { data: partner } = await supabase.from("partners").select("id").eq("auth_user_id", user.id).maybeSingle();
+      let { data: partner } = await supabase.from("partners").select("id").eq("auth_user_id", user.id).maybeSingle();
+      if (!partner) {
+        const admin = createServiceClient();
+        const { data: byEmail } = await admin
+          .from("partners")
+          .select("id, auth_user_id")
+          .ilike("email", email)
+          .limit(1);
+        const row = byEmail?.[0] as { id: string; auth_user_id?: string | null } | undefined;
+        if (row?.id && !row.auth_user_id?.trim()) {
+          await admin.from("partners").update({ auth_user_id: user.id }).eq("id", row.id);
+          partner = { id: row.id };
+        }
+      }
       if (!partner) {
         await supabase.auth.signOut();
         return NextResponse.json({ error: "This email isn't registered as a Fixfy trade." }, { status: 403 });

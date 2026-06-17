@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { partnerCanAccessQuote } from "@/lib/partner-quote-access";
+import { partnerWorkAccessBlocked } from "@/lib/partner-access-gate";
 import { createServiceClient } from "@/lib/supabase/service";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,11 @@ export async function POST(req: Request) {
   }
 
   const svc = createServiceClient();
+  const workBlocked = await partnerWorkAccessBlocked(svc, session.partnerId);
+  if (workBlocked) {
+    return NextResponse.json({ error: workBlocked, code: "account_not_active" }, { status: 403 });
+  }
+
   const allowed = await partnerCanAccessQuote(svc, session.partnerId, quoteId);
   if (!allowed) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 

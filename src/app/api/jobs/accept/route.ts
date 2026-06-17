@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { getPartnerSession } from "@/lib/partner-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 import { partnerMissingRequiredDocs } from "@/lib/partner-docs-gate";
+import { partnerWorkAccessBlocked } from "@/lib/partner-access-gate";
 import { callMasterOsPartnerPortalAccept } from "@/lib/master-os-internal";
 
 export async function POST(req: Request) {
@@ -48,6 +49,11 @@ export async function POST(req: Request) {
         { error: `Upload your required documents first: ${missing.join(", ")}.`, code: "docs_required" },
         { status: 403 },
       );
+    }
+
+    const workBlocked = await partnerWorkAccessBlocked(svc, session.partnerId);
+    if (workBlocked) {
+      return NextResponse.json({ error: workBlocked, code: "account_not_active" }, { status: 403 });
     }
 
     const result = await callMasterOsPartnerPortalAccept(jobId, session.partnerId);

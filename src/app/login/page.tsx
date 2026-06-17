@@ -7,7 +7,8 @@ import { AuthBrandToggle } from "@/components/auth/auth-brand-toggle";
 function LoginForm() {
   const searchParams = useSearchParams();
   const email = searchParams.get("email")?.trim() ?? "";
-  return <AuthBrandToggle initialEmail={email} />;
+  const invite = searchParams.get("invite")?.trim() ?? "";
+  return <AuthBrandToggle initialEmail={email} initialInviteCode={invite} />;
 }
 
 export default function LoginPage() {

@@ -38,6 +38,8 @@ export interface Partner {
   bio: string;
   rating: number;
   ratingsCount: number;
+  /** OS partners.status — onboarding = account in review until staff activates. */
+  status: string;
 }
 
 // master-os: clients / contacts on a job.
