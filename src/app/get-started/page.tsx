@@ -8,7 +8,8 @@
 //   4. Documents      → upload every mandatory doc (dynamic checklist from /required-docs)
 // Finishing hands the (now signed-in, trialing) partner straight into the portal at "/".
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import { T } from "@/lib/tokens";
 import { Button, Icon } from "@/components/ui/primitives";
 import { DEFAULT_PLAN_ID, getPlan, PARTNERS_LP_URL } from "@/lib/plan-catalog";
@@ -56,17 +57,36 @@ const GROUP_LABELS: Record<RequiredDoc["group"], string> = {
 };
 
 export default function GetStartedPage() {
+  return (
+    <Suspense fallback={null}>
+      <GetStartedFunnel />
+    </Suspense>
+  );
+}
+
+function GetStartedFunnel() {
+  // Prefill from the getfixfy.com/network/start handoff (trades/name/business/email).
+  const sp = useSearchParams();
+  const initialTrades = useMemo(() => {
+    const wanted = (sp.get("trades") ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const matched = TRADES.filter((t) => wanted.includes(t.id.toLowerCase())).map((t) => t.id);
+    return new Set<string>(matched.length ? matched : ["Handyman"]);
+  }, [sp]);
+
   const [step, setStep] = useState(0);
 
   // Collected answers
-  const [trades, setTrades] = useState<Set<string>>(new Set(["Handyman"]));
+  const [trades, setTrades] = useState<Set<string>>(initialTrades);
   const [legalType, setLegalType] = useState<LegalType | null>(null);
   const [regNumber, setRegNumber] = useState("");
 
-  // Account
-  const [fullName, setFullName] = useState("");
-  const [company, setCompany] = useState("");
-  const [email, setEmail] = useState("");
+  // Account (prefilled from the handoff params when present)
+  const [fullName, setFullName] = useState(sp.get("name")?.trim() ?? "");
+  const [company, setCompany] = useState(sp.get("business")?.trim() ?? "");
+  const [email, setEmail] = useState(sp.get("email")?.trim() ?? "");
   const [otp, setOtp] = useState("");
   const [accountPhase, setAccountPhase] = useState<"details" | "code">("details");
   const [devCode, setDevCode] = useState<string | null>(null);
