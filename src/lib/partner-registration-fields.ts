@@ -120,12 +120,13 @@ export const SETTINGS_PAGE_RULE_ID: Record<string, string> = {
   selfbill: "bank_details",
 };
 
-export type GetStartedStepId = "trades" | "business" | "contact" | "account" | "coverage" | "documents" | "agreements";
+export type GetStartedStepId = "trades" | "lead" | "business" | "contact" | "account" | "coverage" | "documents" | "agreements";
 
 export const GET_STARTED_STEP_DEFS: { id: GetStartedStepId; ruleIds: string[] }[] = [
   { id: "trades", ruleIds: ["trades"] },
+  { id: "lead", ruleIds: ["account", "phone"] },
   { id: "business", ruleIds: ["legal_type", "tax_id", "vat"] },
-  { id: "contact", ruleIds: ["phone", "address"] },
+  { id: "contact", ruleIds: ["address"] },
   { id: "account", ruleIds: ["account"] },
   { id: "coverage", ruleIds: ["coverage"] },
   { id: "documents", ruleIds: ["documents"] },

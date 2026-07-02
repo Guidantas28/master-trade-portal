@@ -2,12 +2,13 @@
 
 // Partner acquisition funnel — collects everything the OS marks mandatory before staff review:
 //   0. Trades (service_catalog)
-//   1. Business type + tax
-//   2. Contact & address
-//   3. Account + OTP
-//   4. Service area (postcode + radius)
-//   5. Documents
-//   6. Agreements (e-sign)
+//   1. Contact details (name, email, phone) — saved progressively to OS
+//   2. Business type + tax
+//   3. Business address
+//   4. Account + OTP
+//   5. Service area (postcode + radius)
+//   6. Documents
+//   7. Agreements (e-sign)
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
@@ -25,6 +26,7 @@ import {
   type GetStartedStepId,
 } from "@/lib/partner-registration-fields";
 import { useRegistrationConfig } from "@/hooks/use-registration-config";
+import { GetStartedAddressAutocomplete } from "@/components/get-started/address-autocomplete";
 
 type CatalogTrade = { id: string; name: string };
 type LegalType = "self_employed" | "limited_company";
@@ -51,6 +53,8 @@ export default function GetStartedPage() {
     </Suspense>
   );
 }
+
+const DRAFT_STORAGE_KEY = "fixfy_onboarding_draft_code";
 
 function GetStartedFunnel() {
   const sp = useSearchParams();
@@ -95,6 +99,8 @@ function GetStartedFunnel() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draftCode, setDraftCode] = useState("");
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { fields: registrationFields, loading: configLoading } = useRegistrationConfig({ public: true });
   const activeSteps = useMemo(() => filterGetStartedSteps(registrationFields), [registrationFields]);
@@ -141,6 +147,54 @@ function GetStartedFunnel() {
       alive = false;
     };
   }, [inviteCode]);
+
+  useEffect(() => {
+    if (inviteCode) return;
+    const stored = typeof window !== "undefined" ? window.localStorage.getItem(DRAFT_STORAGE_KEY)?.trim() : "";
+    if (!stored) return;
+    setDraftCode(stored);
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/partner/onboarding-draft?code=${encodeURIComponent(stored)}`);
+        const data = (await res.json()) as {
+          ok?: boolean;
+          email?: string;
+          fullName?: string;
+          company?: string;
+          phone?: string;
+          partnerAddress?: string;
+          trades?: string[];
+          catalogServiceIds?: string[];
+        };
+        if (!alive || !data.ok) return;
+        if (data.email?.trim()) setEmail(data.email.trim());
+        if (data.fullName?.trim()) setFullName(data.fullName.trim());
+        if (data.company?.trim()) setCompany(data.company.trim());
+        if (data.phone?.trim()) setPhone(data.phone.trim());
+        if (data.partnerAddress?.trim()) setPartnerAddress(data.partnerAddress.trim());
+        if (data.catalogServiceIds?.length && catalog.length) {
+          const ids = new Set(data.catalogServiceIds.filter((id) => catalog.some((c) => c.id === id)));
+          if (ids.size > 0) {
+            setEnabledIds(ids);
+            setPrimaryId(data.catalogServiceIds[0] ?? [...ids][0] ?? null);
+          }
+        } else if (data.trades?.length && catalog.length) {
+          const matched = catalog.filter((t) => data.trades!.some((n) => n.toLowerCase() === t.name.toLowerCase()));
+          if (matched.length) {
+            const ids = new Set(matched.map((t) => t.id));
+            setEnabledIds(ids);
+            setPrimaryId(matched[0]?.id ?? null);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [inviteCode, catalog]);
 
   useEffect(() => {
     let alive = true;
@@ -207,8 +261,68 @@ function GetStartedFunnel() {
     return { names, primaryName, ids, primary };
   }, [enabledIds, primaryId, catalog]);
 
+  const leadValid =
+    fullName.trim().length > 0 &&
+    company.trim().length > 0 &&
+    email.includes("@") &&
+    (!showPhone || !isPartnerRegistrationFieldMandatory("phone", registrationFields) || phone.trim().length > 0);
+
+  const saveDraft = useCallback(
+    async (opts?: { requireEmail?: boolean }) => {
+      const { names, primaryName, ids } = selectedTradeNames;
+      const trimmedEmail = email.trim().toLowerCase();
+      const hasInvite = Boolean(inviteCode.trim());
+      const hasDraft = Boolean(draftCode.trim());
+      if (opts?.requireEmail && !trimmedEmail.includes("@") && !hasInvite && !hasDraft) {
+        return null;
+      }
+      if (!hasInvite && !hasDraft && !trimmedEmail.includes("@")) {
+        return null;
+      }
+
+      const res = await fetch("/api/partner/onboarding-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inviteCode: inviteCode || undefined,
+          draftCode: draftCode || undefined,
+          email: trimmedEmail || undefined,
+          fullName: fullName.trim() || undefined,
+          company: company.trim() || undefined,
+          phone: phone.trim() || undefined,
+          partnerAddress: partnerAddress.trim() || undefined,
+          trades: names.length ? names : undefined,
+          primaryTrade: primaryName || undefined,
+          catalogServiceIds: ids.length ? ids : undefined,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; draftCode?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error || "Couldn't save your progress.");
+      if (data.draftCode && data.draftCode !== draftCode) {
+        setDraftCode(data.draftCode);
+        window.localStorage.setItem(DRAFT_STORAGE_KEY, data.draftCode);
+      }
+      return data;
+    },
+    [selectedTradeNames, inviteCode, draftCode, email, fullName, company, phone, partnerAddress],
+  );
+
+  useEffect(() => {
+    if (currentStepId !== "lead") return;
+    if (!email.includes("@") && !inviteCode && !draftCode) return;
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      void saveDraft().catch(() => {
+        /* silent while typing */
+      });
+    }, 700);
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    };
+  }, [currentStepId, email, fullName, company, phone, saveDraft, inviteCode, draftCode, selectedTradeNames]);
+
   const regLabel = legalType === "limited_company" ? "Company number (CRN)" : "UTR (Unique Taxpayer Reference)";
-  const detailsValid = fullName.trim() && company.trim() && email.includes("@");
+  const detailsValid = leadValid;
 
   const goBack = () => {
     setError(null);
@@ -316,7 +430,22 @@ function GetStartedFunnel() {
   const onPrimary = () => {
     if (currentStepId === "trades") {
       if (enabledIds.size === 0 || !primaryId) return;
+      if (inviteCode) {
+        setBusy(true);
+        void saveDraft()
+          .then(() => goNext())
+          .catch((e) => setError(e instanceof Error ? e.message : "Couldn't save your trades."))
+          .finally(() => setBusy(false));
+        return;
+      }
       goNext();
+    } else if (currentStepId === "lead") {
+      if (!leadValid) return;
+      setBusy(true);
+      void saveDraft({ requireEmail: true })
+        .then(() => goNext())
+        .catch((e) => setError(e instanceof Error ? e.message : "Couldn't save your details."))
+        .finally(() => setBusy(false));
     } else if (currentStepId === "business") {
       if (showLegalType && isPartnerRegistrationFieldMandatory("legal_type", registrationFields) && !legalType) return;
       if (showTaxId && isPartnerRegistrationFieldMandatory("tax_id", registrationFields) && !regNumber.trim()) return;
@@ -326,9 +455,12 @@ function GetStartedFunnel() {
       }
       goNext();
     } else if (currentStepId === "contact") {
-      if (showPhone && isPartnerRegistrationFieldMandatory("phone", registrationFields) && !phone.trim()) return;
       if (showAddress && isPartnerRegistrationFieldMandatory("address", registrationFields) && !partnerAddress.trim()) return;
-      goNext();
+      setBusy(true);
+      void saveDraft({ requireEmail: true })
+        .then(() => goNext())
+        .catch((e) => setError(e instanceof Error ? e.message : "Couldn't save your address."))
+        .finally(() => setBusy(false));
     } else if (currentStepId === "account") {
       if (accountPhase === "details") {
         if (detailsValid) void createAccount();
@@ -343,6 +475,7 @@ function GetStartedFunnel() {
 
   const primaryLabel = (() => {
     if (currentStepId === "trades") return "Continue";
+    if (currentStepId === "lead") return "Continue";
     if (currentStepId === "business") return "Continue";
     if (currentStepId === "contact") return "Continue";
     if (currentStepId === "account") return accountPhase === "details" ? "Send my code" : "Verify & continue";
@@ -353,6 +486,7 @@ function GetStartedFunnel() {
   const primaryDisabled = (() => {
     if (busy || configLoading) return true;
     if (currentStepId === "trades") return enabledIds.size === 0 || !primaryId || catalogLoading;
+    if (currentStepId === "lead") return !leadValid;
     if (currentStepId === "business") {
       if (showLegalType && isPartnerRegistrationFieldMandatory("legal_type", registrationFields) && !legalType) return true;
       if (showTaxId && isPartnerRegistrationFieldMandatory("tax_id", registrationFields) && !regNumber.trim()) return true;
@@ -363,9 +497,7 @@ function GetStartedFunnel() {
       return false;
     }
     if (currentStepId === "contact") {
-      if (showPhone && isPartnerRegistrationFieldMandatory("phone", registrationFields) && !phone.trim()) return true;
-      if (showAddress && isPartnerRegistrationFieldMandatory("address", registrationFields) && !partnerAddress.trim()) return true;
-      return false;
+      return isPartnerRegistrationFieldMandatory("address", registrationFields) && !partnerAddress.trim();
     }
     if (currentStepId === "account") return accountPhase === "details" ? !detailsValid : otp.trim().length !== 6;
     if (currentStepId === "coverage") {
@@ -463,13 +595,20 @@ function GetStartedFunnel() {
                     const on = enabledIds.has(c.id);
                     const isPrimary = on && c.id === primaryId;
                     return (
-                      <div
+                      <button
                         key={c.id}
+                        type="button"
+                        onClick={() => toggleTrade(c.id)}
                         style={{
                           padding: 14,
                           borderRadius: 12,
                           border: `1.5px solid ${isPrimary ? T.coral : on ? T.lineStrong : T.line}`,
                           background: on ? T.coralTint : T.white,
+                          cursor: "pointer",
+                          width: "100%",
+                          textAlign: "left",
+                          fontFamily: T.sans,
+                          color: T.ink,
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -477,9 +616,8 @@ function GetStartedFunnel() {
                           {isPrimary && (
                             <span style={{ fontSize: 10, fontWeight: 600, color: T.coral, textTransform: "uppercase", letterSpacing: "0.06em" }}>Primary</span>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => toggleTrade(c.id)}
+                          <span
+                            aria-hidden
                             style={{
                               width: 22,
                               height: 22,
@@ -487,25 +625,36 @@ function GetStartedFunnel() {
                               border: on ? "none" : `1.5px solid ${T.lineStrong}`,
                               background: on ? T.coral : "transparent",
                               color: T.white,
-                              cursor: "pointer",
                               display: "inline-flex",
                               alignItems: "center",
                               justifyContent: "center",
+                              flexShrink: 0,
                             }}
                           >
                             {on && <Icon name="check" size={12} />}
-                          </button>
+                          </span>
                         </div>
                         {on && !isPrimary && (
-                          <button
-                            type="button"
-                            onClick={() => makePrimary(c.id)}
-                            style={{ marginTop: 10, padding: 0, background: "transparent", border: "none", color: T.coral, fontFamily: T.sans, fontSize: 12, fontWeight: 500, cursor: "pointer" }}
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              makePrimary(c.id);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                makePrimary(c.id);
+                              }
+                            }}
+                            style={{ marginTop: 10, display: "inline-block", color: T.coral, fontFamily: T.sans, fontSize: 12, fontWeight: 500, cursor: "pointer" }}
                           >
                             Make primary
-                          </button>
+                          </span>
                         )}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -513,9 +662,34 @@ function GetStartedFunnel() {
             </StepShell>
           )}
 
+          {currentStepId === "lead" && (
+            <StepShell
+              eyebrow="Step 2 · Your details"
+              title="Your details"
+              subtitle="Name, email, and phone — the basics to get you set up."
+            >
+              <div style={{ maxWidth: 420, margin: "6px auto 0", textAlign: "left", display: "grid", gap: 12 }}>
+                <LightField label="Your name">
+                  <LightInput value={fullName} onChange={setFullName} placeholder="Jordan Smith" autoFocus />
+                </LightField>
+                <LightField label="Company / trading name">
+                  <LightInput value={company} onChange={setCompany} placeholder="Smith Maintenance Ltd" />
+                </LightField>
+                <LightField label="Work email">
+                  <LightInput value={email} onChange={setEmail} placeholder="you@company.co.uk" type="email" />
+                </LightField>
+                {showPhone && (
+                  <LightField label="Mobile number">
+                    <LightInput value={phone} onChange={setPhone} placeholder="07XXX XXXXXX" type="tel" />
+                  </LightField>
+                )}
+              </div>
+            </StepShell>
+          )}
+
           {currentStepId === "business" && (
             <StepShell
-              eyebrow="Step 2 · Your business"
+              eyebrow="Step 3 · Your business"
               title="How do you trade?"
               subtitle="This sets which tax and compliance documents you'll need."
             >
@@ -547,11 +721,11 @@ function GetStartedFunnel() {
                   {showVat && legalType === "limited_company" && (
                     <>
                       <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>VAT registered?</div>
-                      <div style={{ display: "flex", gap: 10 }}>
-                        <SelectCard selected={vatRegistered === true} onClick={() => setVatRegistered(true)} align="start">
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                        <SelectCard selected={vatRegistered === true} onClick={() => setVatRegistered(true)} size="compact">
                           <span style={{ fontSize: 14, fontWeight: 600 }}>Yes</span>
                         </SelectCard>
-                        <SelectCard selected={vatRegistered === false} onClick={() => setVatRegistered(false)} align="start">
+                        <SelectCard selected={vatRegistered === false} onClick={() => setVatRegistered(false)} size="compact">
                           <span style={{ fontSize: 14, fontWeight: 600 }}>No</span>
                         </SelectCard>
                       </div>
@@ -569,19 +743,19 @@ function GetStartedFunnel() {
 
           {currentStepId === "contact" && (
             <StepShell
-              eyebrow="Step 3 · Contact & address"
+              eyebrow="Step 4 · Contact & address"
               title="How can we reach you?"
               subtitle="Your business address helps us verify your profile and match local work."
             >
               <div style={{ maxWidth: 420, margin: "6px auto 0", textAlign: "left", display: "grid", gap: 12 }}>
-                {showPhone && (
-                  <LightField label="Mobile number">
-                    <LightInput value={phone} onChange={setPhone} placeholder="07XXX XXXXXX" type="tel" autoFocus />
-                  </LightField>
-                )}
                 {showAddress && (
                   <LightField label="Business address">
-                    <LightInput value={partnerAddress} onChange={setPartnerAddress} placeholder="Street, city, postcode" />
+                    <GetStartedAddressAutocomplete
+                      value={partnerAddress}
+                      onChange={setPartnerAddress}
+                      placeholder="Start typing your address or postcode…"
+                      autoFocus
+                    />
                   </LightField>
                 )}
               </div>
@@ -590,26 +764,32 @@ function GetStartedFunnel() {
 
           {currentStepId === "account" && (
             <StepShell
-              eyebrow="Step 4 · Create your account"
-              title={accountPhase === "details" ? "Start your free trial" : "Check your email"}
+              eyebrow="Step 5 · Create your account"
+              title={accountPhase === "details" ? "Verify your email" : "Check your email"}
               subtitle={
                 accountPhase === "details"
-                  ? `7 days free on ${plan.name}, then ${plan.priceLabel}. No card needed today.`
+                  ? `We'll send a 6-digit code to ${email || "your email"} so you can continue. 7 days free on ${plan.name} — no card needed today.`
                   : `We sent a 6-digit code to ${email}. Enter it to continue.`
               }
             >
               <div style={{ maxWidth: 380, margin: "6px auto 0", textAlign: "left" }}>
                 {accountPhase === "details" ? (
                   <div style={{ display: "grid", gap: 12 }}>
-                    <LightField label="Your name">
-                      <LightInput value={fullName} onChange={setFullName} placeholder="Jordan Smith" autoFocus />
-                    </LightField>
-                    <LightField label="Company / trading name">
-                      <LightInput value={company} onChange={setCompany} placeholder="Smith Maintenance Ltd" />
-                    </LightField>
-                    <LightField label="Work email">
-                      <LightInput value={email} onChange={setEmail} placeholder="you@company.co.uk" type="email" />
-                    </LightField>
+                    <div
+                      style={{
+                        padding: "14px 16px",
+                        borderRadius: 12,
+                        border: `1px solid ${T.line}`,
+                        background: T.white,
+                        textAlign: "left",
+                      }}
+                    >
+                      <p style={{ margin: 0, fontSize: 13, color: T.mute }}>Signing up as</p>
+                      <p style={{ margin: "6px 0 0", fontSize: 15, fontWeight: 600, color: T.ink }}>{fullName || "—"}</p>
+                      <p style={{ margin: "4px 0 0", fontSize: 13, color: T.slate }}>{company || "—"}</p>
+                      <p style={{ margin: "4px 0 0", fontSize: 13, color: T.slate }}>{email || "—"}</p>
+                      {phone.trim() ? <p style={{ margin: "4px 0 0", fontSize: 13, color: T.slate }}>{phone}</p> : null}
+                    </div>
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: 12 }}>
@@ -646,7 +826,7 @@ function GetStartedFunnel() {
 
           {currentStepId === "coverage" && (
             <StepShell
-              eyebrow="Step 5 · Service area"
+              eyebrow="Step 6 · Service area"
               title="Where do you work?"
               subtitle="Set your base postcode and how far you're willing to travel for jobs."
             >
@@ -1090,13 +1270,27 @@ function StepShell({
   );
 }
 
+function useNarrowLayout(maxWidth = 560) {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${maxWidth}px)`);
+    const update = () => setNarrow(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [maxWidth]);
+  return narrow;
+}
+
 function CardGrid({ children, cols }: { children: ReactNode; cols?: number }) {
+  const narrow = useNarrowLayout();
+  const columns = narrow ? "1fr" : cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fit, minmax(150px, 1fr))";
   return (
     <div
       style={{
         display: "grid",
         gap: 14,
-        gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fit, minmax(150px, 1fr))",
+        gridTemplateColumns: columns,
         maxWidth: 560,
         margin: "0 auto",
       }}
@@ -1110,15 +1304,18 @@ function SelectCard({
   selected,
   onClick,
   align = "center",
+  size = "default",
   children,
 }: {
   selected: boolean;
   multi?: boolean;
   onClick: () => void;
   align?: "center" | "start";
+  size?: "default" | "compact";
   children: ReactNode;
 }) {
   const [hover, setHover] = useState(false);
+  const compact = size === "compact";
   return (
     <button
       type="button"
@@ -1128,15 +1325,16 @@ function SelectCard({
       style={{
         position: "relative",
         display: "flex",
-        flexDirection: "column",
-        alignItems: align === "center" ? "center" : "flex-start",
-        justifyContent: "center",
-        gap: 8,
-        minHeight: 108,
-        padding: "20px 16px",
+        flexDirection: compact ? "row" : "column",
+        alignItems: compact ? "center" : align === "center" ? "center" : "flex-start",
+        justifyContent: compact ? "space-between" : "center",
+        gap: compact ? 10 : 8,
+        width: "100%",
+        minHeight: compact ? 48 : 108,
+        padding: compact ? "12px 14px" : "20px 16px",
         borderRadius: 14,
         cursor: "pointer",
-        textAlign: align === "center" ? "center" : "left",
+        textAlign: compact ? "left" : align === "center" ? "center" : "left",
         color: T.ink,
         fontFamily: T.sans,
         background: selected ? T.coralTint : T.white,
@@ -1149,11 +1347,12 @@ function SelectCard({
         transition: `border-color 140ms ${T.ease}, background 140ms ${T.ease}, box-shadow 140ms ${T.ease}`,
       }}
     >
+      <span style={{ flex: compact ? 1 : undefined, minWidth: 0, paddingRight: compact ? 0 : 28 }}>{children}</span>
       <span
         style={{
-          position: "absolute",
-          top: 12,
-          right: 12,
+          ...(compact
+            ? { position: "relative", top: 0, right: 0, flexShrink: 0 }
+            : { position: "absolute", top: 12, right: 12 }),
           width: 22,
           height: 22,
           borderRadius: 9999,
@@ -1167,7 +1366,6 @@ function SelectCard({
       >
         {selected && <Icon name="check" size={14} />}
       </span>
-      {children}
     </button>
   );
 }
