@@ -51,14 +51,21 @@ export async function POST(req: NextRequest) {
   }
 
   if (existingPartner?.id) {
-    if (!inviteCode) {
-      return NextResponse.json(
-        { error: "You were invited by Fixfy. Open the invite link from your email to continue." },
-        { status: 409 },
-      );
+    if (existingPartner?.auth_user_id?.trim()) {
+      return NextResponse.json({ error: "That email is already registered. Sign in instead." }, { status: 409 });
     }
     try {
-      const result = await claimPartnerInvite(admin, { email, inviteCode, fullName, company, plan });
+      const result = await claimPartnerInvite(admin, { email, inviteCode: inviteCode || undefined, fullName, company, plan });
+      const trialEnds = new Date(Date.now() + PARTNER_TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      await admin
+        .from("partners")
+        .update({
+          subscription_status: "trialing",
+          trial_ends_at: trialEnds,
+          plan,
+        })
+        .eq("id", result.partnerId)
+        .is("trial_ends_at", null);
       const dev = process.env.NODE_ENV !== "production";
       return NextResponse.json({
         ok: true,
