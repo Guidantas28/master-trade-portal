@@ -58,10 +58,11 @@ export function mergePartnerRegistrationRules(stored: unknown): PartnerRegistrat
     if (row == null || typeof row !== "object") continue;
     const o = row as { id?: unknown; visible?: unknown; mandatory?: unknown; enabled?: unknown };
     if (typeof o.id !== "string" || !o.id.trim()) continue;
-    const locked = PARTNER_REGISTRATION_FIELD_CATALOG.find((c) => c.id === o.id.trim())?.locked;
+    const id = o.id.trim();
+    const locked = PARTNER_REGISTRATION_FIELD_CATALOG.find((c) => c.id === id)?.locked;
     const visible = locked ? true : o.visible !== undefined ? Boolean(o.visible) : o.enabled !== undefined ? Boolean(o.enabled) : true;
-    storedById.set(o.id.trim(), {
-      id: o.id.trim(),
+    storedById.set(id, {
+      id,
       visible,
       mandatory: locked ? true : visible && Boolean(o.mandatory),
     });
